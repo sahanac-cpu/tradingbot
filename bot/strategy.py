@@ -64,6 +64,8 @@ class Strategy:
     pos: Position | None = None
     bounce_low: float | None = None
     bounce_count: int = 0
+    hod: float = float('-inf')
+    lod: float = float('inf')
 
     # ---------- helpers ----------
     def atr(self):
@@ -87,7 +89,8 @@ class Strategy:
     # ---------- main loop ----------
     def on_bar(self, bar: Bar):
         """Feed one closed bar. Returns an action dict or None."""
-        prior = self.bars[:]          # HOD/LOD *before* this bar
+        hod, lod = self.hod, self.lod  # HOD/LOD *before* this bar
+        self.hod, self.lod = max(self.hod, bar.h), min(self.lod, bar.l)
         self.bars.append(bar)
         self.profile[self.bucket((bar.h + bar.l + bar.c) / 3)] += bar.v
         if len(self.bars) < self.p.min_bars:
@@ -95,8 +98,6 @@ class Strategy:
         atr = self.atr() or 1e-9
         if self.pos:
             return self._manage(bar, atr)
-        hod = max(b.h for b in prior)
-        lod = min(b.l for b in prior)
         return self._breakout(bar, hod, lod, atr) or self._bounce(bar, atr)
 
     def _enter(self, side, price, stop, atr, reason):
@@ -165,3 +166,4 @@ class Strategy:
     def new_day(self):
         self.bars.clear(); self.profile.clear()
         self.pos = None; self.bounce_low = None; self.bounce_count = 0
+        self.hod, self.lod = float('-inf'), float('inf')

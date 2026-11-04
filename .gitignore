@@ -2,3 +2,5 @@ trades.csv
 account.json
 __pycache__/
 model.json
+data/
+backtest_*
