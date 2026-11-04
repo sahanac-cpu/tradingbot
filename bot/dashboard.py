@@ -1,4 +1,5 @@
 """Tiny local web dashboard: http://localhost:8000 (no login, only on your computer)."""
+from __future__ import annotations
 import json, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 

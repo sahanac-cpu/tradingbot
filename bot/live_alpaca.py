@@ -6,6 +6,7 @@
 Polls 1-minute bars once a minute during market hours and sends market orders to the
 *paper* endpoint only. Stops/targets are managed by the strategy on bar closes.
 """
+from __future__ import annotations
 import json, os, sys, time, urllib.request
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo

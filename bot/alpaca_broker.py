@@ -1,5 +1,6 @@
 """Sends the bot's trades to your Alpaca PAPER account (fake money, real order handling).
 The URL is hard-coded to paper-api, so this can never touch real money."""
+from __future__ import annotations
 import json, os, urllib.request, urllib.error
 
 URL = "https://paper-api.alpaca.markets"

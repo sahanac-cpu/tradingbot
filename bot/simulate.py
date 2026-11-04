@@ -5,6 +5,7 @@ with columns t,o,h,l,c,v (one session per file).
     python -m bot.simulate            # 50 synthetic days
     python -m bot.simulate data.csv   # your own 1-min bars
 """
+from __future__ import annotations
 import csv, random, sys
 from .strategy import Strategy, Bar
 

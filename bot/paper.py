@@ -1,4 +1,5 @@
 """Local fake-money broker: cash, positions, fills with slippage, trade log CSV."""
+from __future__ import annotations
 import csv, os
 from datetime import datetime
 

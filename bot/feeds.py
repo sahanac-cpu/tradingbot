@@ -1,5 +1,6 @@
 """Real-time 1-minute bars. Stocks/ETFs: Yahoo (no account) or Alpaca. Crypto: Alpaca's
 free crypto feed (no keys needed). Crypto symbols look like BTC/USD."""
+from __future__ import annotations
 import json, os, urllib.request, urllib.parse
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo

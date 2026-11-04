@@ -1,7 +1,7 @@
 # Setup guide (about 10 minutes)
 
 ## 1. Install Python (once)
-- Mac: download from https://www.python.org/downloads/ (3.10 or newer) and install.
+- Mac: download from https://www.python.org/downloads/ (3.9 or newer) and install.
 - Windows: same site; on the first installer screen tick **"Add python.exe to PATH"**.
 - Check it worked: open Terminal (Mac) or Command Prompt (Windows) and type `python3 --version` (Windows: `python --version`).
 

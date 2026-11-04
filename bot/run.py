@@ -10,6 +10,7 @@ Risk-averse defaults: long only, 0.25% of equity risked per trade, max 10% of eq
 position, max 6 trades a day, ETFs only 9:50-15:30 ET and flat by 15:50, stop for the day
 at -1%. Crypto trades 24/7 with the same limits (its "day" runs midnight to midnight ET).
 """
+from __future__ import annotations
 import argparse, json, os, time, webbrowser
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo

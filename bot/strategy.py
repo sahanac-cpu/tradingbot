@@ -13,6 +13,7 @@ don't give you a full order book, so each idea is approximated with bars + volum
      SHAKEOUT_BARS minutes, scratch it near break-even.
   5. Mirror everything for shorts at the low of day.
 """
+from __future__ import annotations
 from dataclasses import dataclass, field
 from collections import defaultdict
 

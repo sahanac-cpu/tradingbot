@@ -3,6 +3,7 @@
     python -m bot.report            # from trades.csv
     python -m bot.report --alpaca   # straight from your Alpaca paper account
 """
+from __future__ import annotations
 import csv, sys
 
 
