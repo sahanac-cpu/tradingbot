@@ -13,12 +13,25 @@ The synthetic results don't count as evidence: the generator puts in the same
 patterns the strategy looks for. Test on real historical bars before you believe anything.
 Paper trading only.
 
-## Real-time paper bot (fake money, no account needed)
+## Real-time paper bot
+
+![dashboard](dashboard.png)
 
 ```bash
-python -m bot.run SPY QQQ AAPL          # live Yahoo 1-min data, $100k fake cash
-python -m bot.run SPY --replay          # replay today's bars now (works after hours)
-python -m bot.run SPY --feed alpaca     # Alpaca IEX data instead (APCA_API_KEY_ID/SECRET)
+python -m bot.run                         # SPY + QQQ, $100k fake money, opens http://localhost:8000
+python -m bot.run --broker alpaca         # same, but orders go to your Alpaca PAPER account
+python -m bot.run --replay                # replay today's bars now (after hours)
+python -m bot.report                      # every trade + win rate, drawdown, verdict
+python -m bot.report --alpaca             # same, read from your Alpaca paper account
 ```
-Options: `--cash`, `--risk` (default 0.005 = 0.5% of equity per trade), `--max-loss` (0.02 daily stop).
-Fills, P&L and equity are logged to `trades.csv`. Positions are closed at 15:50 ET.
+
+Alpaca paper setup: sign up free at alpaca.markets, open the Paper Trading dashboard, create API keys, then
+`export APCA_API_KEY_ID=... APCA_API_SECRET_KEY=...` (Windows: `set ...`). Alpaca orders are bracket
+orders, so the stop-loss sits at the broker even if your computer goes off.
+
+Risk-averse defaults: long only, 0.25% of equity risked per trade, max 10% of equity per position,
+max 4 trades/day, trades only 9:50-15:30 ET, stops for the day at -1%, flat by 15:50 ET.
+Change with `--risk --max-position --max-trades --max-loss --allow-shorts`.
+
+`bot.report` says "ready to consider a small real-money test" only after 40+ trading days,
+100+ trades, profit factor >= 1.3 and a net profit. This code only ever trades paper.
