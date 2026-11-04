@@ -21,7 +21,8 @@ from .learner import Learner, features
 
 ET = ZoneInfo("America/New_York")
 ACCOUNT = "account.json"
-DEFAULT = ["VOO", "SPY", "QQQ", "IWM", "DIA", "BTC/USD", "ETH/USD"]
+DEFAULT = ["VOO", "SPY", "QQQ", "IWM", "DIA"]   # crypto off by default: fees > 1-min targets
+CRYPTO_FEE = 0.0025                              # Alpaca crypto fee per side
 
 
 def main():
@@ -82,7 +83,7 @@ def main():
         if alp:
             try: alp.exit_all(sym)
             except Exception as e: log(f"{sym} Alpaca exit error: {e}", "bad")
-        pnl = broker.fill(sym, -q, px, reason)
+        pnl = broker.fill(sym, -q, px, reason, CRYPTO_FEE if feeds.is_crypto(sym) else 0.0)
         if sym in feats:
             x = feats.pop(sym)
             if not a.replay:   # don't learn the same replayed day over and over
@@ -115,16 +116,22 @@ def main():
         eq = broker.equity(marks)
         qty = min(eq * a.risk / max(abs(sig["price"] - sig["stop"]), 1e-9), eq * a.max_position / sig["price"])
         qty = round(qty, 6) if crypto else int(qty)
+        if crypto:   # only take the trade if the target clears fees with room to spare
+            reward = (sig["target"] - sig["price"]) / sig["price"]
+            if reward < 3 * 2 * CRYPTO_FEE:
+                strat[sym].pos = None
+                return log(f"{sym} skipped (target {reward:.2%} away, fees {2*CRYPTO_FEE:.2%}): {sig['reason']}", "skip")
         if qty * sig["price"] < 10:
             strat[sym].pos = None; return
         if alp:
             try:
-                alp.enter(sym, qty, sig["action"], sig["stop"], sig["target"])
+                o = alp.enter(sym, qty, sig["action"], sig["stop"], sig["target"])
+                qty = o.get("held_qty", qty)
             except Exception as e:
                 strat[sym].pos = None
                 return log(f"{sym} Alpaca rejected order: {e}", "bad")
         side = "BUY" if sig["action"] == "buy" else "SHORT"
-        broker.fill(sym, qty if side == "BUY" else -qty, sig["price"], sig["reason"])
+        broker.fill(sym, qty if side == "BUY" else -qty, sig["price"], sig["reason"], CRYPTO_FEE if crypto else 0.0)
         meta[sym] = sig; feats[sym] = x; st["trades_today"] += 1
         record(sym, t, side, qty, sig["price"], 0, sig["reason"])
         log(f"{sym} {side} {qty:g} @ {sig['price']:,.2f}  stop {sig['stop']:,.2f}  target {sig['target']:,.2f}  - {sig['reason']}", "entry")
@@ -158,6 +165,7 @@ def main():
     if not a.no_browser:
         webbrowser.open(url)
 
+    started = datetime.now(timezone.utc)
     while True:
         now = datetime.now(ET)
         if st["day"] != now.date():
@@ -189,7 +197,9 @@ def main():
                     for k in ("t", "c", "hod", "lod"):
                         del ch[k][:-600]
                 sig = strat[sym].on_bar(b)
-                if sig:
+                if sig and not a.replay and bt < started - timedelta(minutes=2):
+                    strat[sym].pos = None      # warm-up on old bars: learn the day, don't trade it
+                elif sig:
                     act(sym, b, sig, t)
                 if not st["halted"] and broker.equity(marks) < st["day_start"] * (1 - a.max_loss):
                     st["halted"] = True

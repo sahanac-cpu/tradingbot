@@ -13,15 +13,16 @@ class PaperBroker:
             with open(log, "w", newline="") as f:
                 csv.writer(f).writerow(["time", "symbol", "side", "qty", "price", "pnl", "reason", "equity"])
 
-    def fill(self, sym, qty, price, reason=""):
+    def fill(self, sym, qty, price, reason="", fee_rate=0.0):
         """qty>0 buy, qty<0 sell. Returns realized pnl."""
         px = price + self.slip * price * (1 if qty > 0 else -1)
-        self.cash -= qty * px + self.comm
+        fee = abs(qty) * px * fee_rate + self.comm
+        self.cash -= qty * px + fee
         q0, avg = self.pos.get(sym, (0, 0.0))
         pnl = 0.0
         if q0 and (q0 > 0) != (qty > 0):          # closing (part of) a position
             closed = min(abs(qty), abs(q0))
-            pnl = closed * (px - avg) * (1 if q0 > 0 else -1) - self.comm
+            pnl = closed * (px - avg) * (1 if q0 > 0 else -1) - fee - closed * avg * fee_rate
         q1 = q0 + qty
         avg = avg if (q0 and abs(q1) < abs(q0)) else ((q0 * avg + qty * px) / q1 if q1 else 0.0)
         self.pos[sym] = (q1, avg) if q1 else (0, 0.0)

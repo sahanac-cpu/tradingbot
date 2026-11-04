@@ -23,13 +23,30 @@ def account():
 
 
 def enter(sym, qty, side, stop, target):
-    if "/" in sym:   # crypto: Alpaca has no bracket orders, so send market + a separate stop
+    if "/" in sym:
+        # Crypto: no bracket orders. Buy, then protect what we ACTUALLY hold - Alpaca takes
+        # its fee out of the coins, so the position is slightly smaller than the order.
+        import time
         o = _req("POST", "/v2/orders", {"symbol": sym, "qty": str(qty), "side": side,
                                         "type": "market", "time_in_force": "gtc"})
-        import time; time.sleep(2)
-        _req("POST", "/v2/orders", {"symbol": sym, "qty": str(qty), "side": "sell", "type": "stop_limit",
-                                    "stop_price": round(stop, 2), "limit_price": round(stop * 0.995, 2),
-                                    "time_in_force": "gtc"})
+        held = 0.0
+        for _ in range(10):
+            time.sleep(1)
+            try:
+                held = float(_req("GET", f"/v2/positions/{sym.replace('/', '')}")["qty"])
+                break
+            except RuntimeError:
+                pass
+        if held <= 0:
+            raise RuntimeError("market buy did not fill")
+        try:
+            _req("POST", "/v2/orders", {"symbol": sym, "qty": str(held), "side": "sell", "type": "stop_limit",
+                                        "stop_price": round(stop, 2), "limit_price": round(stop * 0.995, 2),
+                                        "time_in_force": "gtc"})
+        except RuntimeError:
+            exit_all(sym)          # never sit in a position without a stop
+            raise
+        o["held_qty"] = held
         return o
     """Bracket order: the stop-loss and take-profit live at Alpaca, so you're protected
     even if your computer or the bot dies mid-trade."""
