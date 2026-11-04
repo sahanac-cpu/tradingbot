@@ -41,7 +41,7 @@ class Params:
     shakeout_bars: int = 6            # his rule: 5-6 min of no progress -> scratch
     atr_len: int = 14
     min_bars: int = 20                # let the opening range form first
-    profile_tick: float = 0.05        # volume-profile bucket size (price units)
+    profile_tick: float = 0.0005      # volume-profile bucket = 0.05% of price (works for $50 ETFs and $90k BTC)
 
 
 @dataclass
@@ -71,7 +71,8 @@ class Strategy:
         return sum(trs) / len(trs) if trs else 0.0
 
     def bucket(self, price):
-        return round(price / self.p.profile_tick) * self.p.profile_tick
+        tick = self.bars[0].c * self.p.profile_tick
+        return round(price / tick) * tick
 
     def next_volume_node(self, price, side):
         """Nearest price beyond `price` with heavy volume (top 20% of buckets) = resistance."""

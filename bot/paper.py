@@ -4,7 +4,7 @@ from datetime import datetime
 
 
 class PaperBroker:
-    def __init__(self, cash=100_000.0, slippage=0.01, commission=0.0, log="trades.csv"):
+    def __init__(self, cash=100_000.0, slippage=0.0001, commission=0.0, log="trades.csv"):
         self.cash, self.start_cash = cash, cash
         self.slip, self.comm, self.log = slippage, commission, log
         self.pos = {}   # sym -> (qty signed, avg price)
@@ -14,7 +14,7 @@ class PaperBroker:
 
     def fill(self, sym, qty, price, reason=""):
         """qty>0 buy, qty<0 sell. Returns realized pnl."""
-        px = price + self.slip * (1 if qty > 0 else -1)
+        px = price + self.slip * price * (1 if qty > 0 else -1)
         self.cash -= qty * px + self.comm
         q0, avg = self.pos.get(sym, (0, 0.0))
         pnl = 0.0

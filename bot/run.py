@@ -1,16 +1,14 @@
-"""Full real-time paper bot with a live browser dashboard. No login needed.
+"""Real-time paper bot with a live browser dashboard.
 
-    python -m bot.run SPY QQQ AAPL                 # then open http://localhost:8000
-    python -m bot.run SPY --replay                 # replay today's bars (test after hours)
-    python -m bot.run SPY --feed alpaca            # Alpaca IEX data (set APCA_* keys)
-    python -m bot.run SPY --reset                  # start over at --cash
+    python -m bot.run                              # default ETFs + BTC/ETH, local fake money
+    python -m bot.run --broker alpaca              # orders go to your Alpaca PAPER account
+    python -m bot.run VOO SPY BTC/USD              # pick your own (crypto = XXX/USD)
+    python -m bot.run --replay                     # replay today's bars now (any time)
+    python -m bot.run --reset                      # start the local fake account over
 
-    python -m bot.run --broker alpaca              # send orders to your Alpaca PAPER account
-
-Risk-averse defaults: trades SPY and QQQ (the most liquid ETFs), long only, risks 0.25% of
-equity per trade, max 10% of equity in one position, max 4 trades a day, no new trades
-before 9:50 or after 15:30 ET, stops for the day at -1%, flattens at 15:50 ET.
-Your fake balance is saved in account.json and survives restarts.
+Risk-averse defaults: long only, 0.25% of equity risked per trade, max 10% of equity per
+position, max 6 trades a day, ETFs only 9:50-15:30 ET and flat by 15:50, stop for the day
+at -1%. Crypto trades 24/7 with the same limits (its "day" runs midnight to midnight ET).
 """
 import argparse, json, os, time, webbrowser
 from datetime import datetime, timedelta, timezone
@@ -21,169 +19,174 @@ from . import feeds, dashboard
 
 ET = ZoneInfo("America/New_York")
 ACCOUNT = "account.json"
+DEFAULT = ["VOO", "SPY", "QQQ", "IWM", "DIA", "BTC/USD", "ETH/USD"]
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("symbols", nargs="*", default=["SPY", "QQQ"])
+    ap.add_argument("symbols", nargs="*", default=DEFAULT)
     ap.add_argument("--feed", choices=["yahoo", "alpaca"], default="yahoo")
+    ap.add_argument("--broker", choices=["local", "alpaca"], default="local")
     ap.add_argument("--cash", type=float, default=100_000)
     ap.add_argument("--risk", type=float, default=0.0025)
-    ap.add_argument("--max-loss", type=float, default=0.01)
     ap.add_argument("--max-position", type=float, default=0.10)
-    ap.add_argument("--max-trades", type=int, default=4)
+    ap.add_argument("--max-trades", type=int, default=6)
+    ap.add_argument("--max-loss", type=float, default=0.01)
     ap.add_argument("--allow-shorts", action="store_true")
-    ap.add_argument("--broker", choices=["local", "alpaca"], default="local")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--replay", action="store_true")
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--no-browser", action="store_true")
     a = ap.parse_args()
-    get = feeds.yahoo_bars if a.feed == "yahoo" else feeds.alpaca_bars
+    a.symbols = [s.upper() for s in a.symbols]
+    S, L = dashboard.STATE, dashboard.LOCK
+
     alp = None
     if a.broker == "alpaca":
         from . import alpaca_broker as alp
-        acct = alp.account()
-        a.cash = float(acct["equity"])
-        print(f"connected to Alpaca PAPER account, equity ${a.cash:,.2f}")
-    S, L = dashboard.STATE, dashboard.LOCK
-
+        a.cash = float(alp.account()["equity"])
     broker = PaperBroker(a.cash)
     if os.path.exists(ACCOUNT) and not a.reset and not alp:
         acct = json.load(open(ACCOUNT))
         broker.cash, broker.start_cash = acct["cash"], acct["start_cash"]
+
     def save():
-        flat = {k: v for k, v in broker.pos.items() if v[0]}
-        json.dump({"cash": broker.cash if not flat else broker.cash, "start_cash": broker.start_cash}, open(ACCOUNT, "w"))
+        json.dump({"cash": broker.cash, "start_cash": broker.start_cash}, open(ACCOUNT, "w"))
 
     strat = {s: Strategy() for s in a.symbols}
     seen = {s: set() for s in a.symbols}
-    meta = {}           # sym -> stop/target/reason of open trade
-    marks, day_start, halted, day = {}, broker.cash, False, None
-    trades_today = 0
+    meta, marks, opens = {}, {}, {}
+    st = {"halted": False, "day": None, "day_start": broker.cash, "trades_today": 0}
 
-    def log(msg):
-        line = f"{datetime.now(ET):%H:%M:%S} {msg}"
+    def log(msg, kind="info"):
+        line = f"{datetime.now(ET):%H:%M:%S}  {msg}"
         print(line)
         with L:
-            S["log"] = (S["log"] + [line])[-300:]
+            S["log"] = (S["log"] + [{"m": line, "k": kind}])[-300:]
 
-    def record(sym, b, side, qty, px, pnl, reason):
+    def record(sym, t, side, qty, px, pnl, reason):
         with L:
-            S["trades"].append({"t": b.t[11:16], "sym": sym, "side": side, "qty": qty, "px": px,
+            S["trades"].append({"t": t, "sym": sym, "side": side, "qty": qty, "px": px,
                                 "pnl": round(pnl, 2), "reason": reason})
-            S["charts"][sym]["marks"].append({"t": b.t[11:16], "px": px,
-                                              "k": {"BUY": "buy", "SHORT": "sell"}.get(side, "exit")})
+            S["charts"][sym]["marks"].append({"t": t, "px": px, "k": {"BUY": "buy", "SHORT": "sell"}.get(side, "exit")})
 
-    def act(sym, b, sig):
-        nonlocal halted, trades_today
+    def close(sym, px, reason, t):
         q, _ = broker.pos.get(sym, (0, 0))
-        if sig["action"] in ("buy", "sell"):
-            mins = datetime.fromisoformat(b.t).hour * 60 + datetime.fromisoformat(b.t).minute
-            why = ("daily loss limit" if halted else "already in a trade" if q else
-                   "shorts disabled" if sig["action"] == "sell" and not a.allow_shorts else
-                   f"max {a.max_trades} trades/day" if trades_today >= a.max_trades else
-                   "outside 9:50-15:30 window" if not (590 <= mins <= 930) else None)
-            if why:
-                strat[sym].pos = None
-                return log(f"{sym} skipped signal ({why}): {sig['reason']}")
-            eq = broker.equity(marks)
-            qty = int(min(eq * a.risk / max(abs(sig["price"] - sig["stop"]), 0.01), eq * a.max_position / sig["price"]))
-            if qty <= 0:
-                strat[sym].pos = None; return
-            side = "BUY" if sig["action"] == "buy" else "SHORT"
-            if alp:
-                try:
-                    alp.enter(sym, qty, sig["action"], sig["stop"], sig["target"])
-                except Exception as e:
-                    strat[sym].pos = None
-                    return log(f"{sym} Alpaca rejected order: {e}")
-            trades_today += 1
-            broker.fill(sym, qty if side == "BUY" else -qty, sig["price"], sig["reason"])
-            meta[sym] = sig
-            record(sym, b, side, qty, sig["price"], 0, sig["reason"])
-            log(f"{sym} {side} {qty} @ {sig['price']:.2f} stop {sig['stop']:.2f} target {sig['target']:.2f} - {sig['reason']}")
-        elif sig["action"] == "exit" and q:
-            if alp:
-                try: alp.exit_all(sym)
-                except Exception as e: log(f"{sym} Alpaca exit error: {e}")
-            pnl = broker.fill(sym, -q, sig["price"], sig["reason"])
-            record(sym, b, "EXIT", abs(q), sig["price"], pnl, sig["reason"])
-            meta.pop(sym, None)
-            log(f"{sym} EXIT {abs(q)} @ {sig['price']:.2f} P&L ${pnl:+.2f} - {sig['reason']}")
-            save()
-        if not halted and broker.equity(marks) < day_start * (1 - a.max_loss):
-            halted = True
-            log("DAILY LOSS LIMIT HIT - no new trades today")
+        if not q:
+            return
+        if alp:
+            try: alp.exit_all(sym)
+            except Exception as e: log(f"{sym} Alpaca exit error: {e}", "bad")
+        pnl = broker.fill(sym, -q, px, reason)
+        record(sym, t, "EXIT", abs(q), px, pnl, reason)
+        meta.pop(sym, None); strat[sym].pos = None
+        log(f"{sym} EXIT {abs(q):g} @ {px:,.2f}  P&L ${pnl:+,.2f}  - {reason}", "win" if pnl > 0 else "loss")
+        save()
 
-    def flatten(why):
-        for sym, (q, _) in list(broker.pos.items()):
-            if q:
-                if alp:
-                    try: alp.exit_all(sym)
-                    except Exception as e: log(f"{sym} Alpaca exit error: {e}")
-                pnl = broker.fill(sym, -q, marks[sym], why)
-                class B: t = datetime.now(timezone.utc).isoformat()
-                record(sym, B, "EXIT", abs(q), marks[sym], pnl, why)
-                log(f"{sym} FLATTEN {abs(q)} @ {marks[sym]:.2f} P&L ${pnl:+.2f}")
+    def act(sym, b, sig, t):
+        q, _ = broker.pos.get(sym, (0, 0))
+        crypto = feeds.is_crypto(sym)
+        if sig["action"] == "exit":
+            return close(sym, sig["price"], sig["reason"], t)
+        bt = datetime.fromisoformat(b.t.replace("Z", "+00:00")).astimezone(ET)
+        mins = bt.hour * 60 + bt.minute
+        why = ("daily loss limit" if st["halted"] else "already in a trade" if q else
+               "shorts disabled" if sig["action"] == "sell" and (crypto or not a.allow_shorts) else
+               f"max {a.max_trades} trades/day" if st["trades_today"] >= a.max_trades else
+               "outside 9:50-15:30 window" if not crypto and not (590 <= mins <= 930) else None)
+        if why:
             strat[sym].pos = None
-        meta.clear(); save()
+            return log(f"{sym} skipped ({why}): {sig['reason']}", "skip")
+        eq = broker.equity(marks)
+        qty = min(eq * a.risk / max(abs(sig["price"] - sig["stop"]), 1e-9), eq * a.max_position / sig["price"])
+        qty = round(qty, 6) if crypto else int(qty)
+        if qty * sig["price"] < 10:
+            strat[sym].pos = None; return
+        if alp:
+            try:
+                alp.enter(sym, qty, sig["action"], sig["stop"], sig["target"])
+            except Exception as e:
+                strat[sym].pos = None
+                return log(f"{sym} Alpaca rejected order: {e}", "bad")
+        side = "BUY" if sig["action"] == "buy" else "SHORT"
+        broker.fill(sym, qty if side == "BUY" else -qty, sig["price"], sig["reason"])
+        meta[sym] = sig; st["trades_today"] += 1
+        record(sym, t, side, qty, sig["price"], 0, sig["reason"])
+        log(f"{sym} {side} {qty:g} @ {sig['price']:,.2f}  stop {sig['stop']:,.2f}  target {sig['target']:,.2f}  - {sig['reason']}", "entry")
 
     def publish(status):
         eq = broker.equity(marks)
+        trades = [x for x in S["trades"] if x["side"] == "EXIT"]
+        wins = [x for x in trades if x["pnl"] > 0]
         with L:
             S["status"] = status
+            S["broker"] = "Alpaca paper" if alp else "Local fake money"
+            S["stats"] = {"n": len(trades), "win": round(100 * len(wins) / len(trades)) if trades else None,
+                          "trades_today": st["trades_today"], "max_trades": a.max_trades, "halted": st["halted"],
+                          "risk": a.risk, "max_loss": a.max_loss}
             S["equity"] = (S["equity"] + [{"t": datetime.now(ET).strftime("%m-%d %H:%M"), "v": round(eq, 2),
-                                            "day": round(eq - day_start, 2), "tot": round(eq - broker.start_cash, 2)}])[-2000:]
+                                            "day": round(eq - st["day_start"], 2), "tot": round(eq - broker.start_cash, 2)}])[-2000:]
             S["positions"] = [{"sym": s, "qty": q, "entry": avg, "last": marks.get(s, avg),
                                "pnl": round(q * (marks.get(s, avg) - avg), 2), "stop": meta[s]["stop"],
                                "target": meta[s]["target"], "reason": meta[s]["reason"]}
                               for s, (q, avg) in broker.pos.items() if q and s in meta]
+            S["tickers"] = [{"sym": s, "last": marks.get(s), "open": opens.get(s),
+                             "crypto": feeds.is_crypto(s), "live": a.replay or feeds.market_open(s)} for s in a.symbols]
 
     for s in a.symbols:
         S["charts"][s] = {"t": [], "c": [], "hod": [], "lod": [], "marks": []}
     dashboard.serve(a.port)
     url = f"http://localhost:{a.port}"
-    log(f"bot started: {', '.join(a.symbols)} | feed={a.feed} | fake cash ${broker.cash:,.0f} | dashboard {url}")
+    log(f"bot started - {', '.join(a.symbols)} - {'Alpaca PAPER' if alp else 'local fake money'} ${broker.cash:,.0f} - dashboard {url}")
     if not a.no_browser:
         webbrowser.open(url)
 
     while True:
         now = datetime.now(ET)
-        if not a.replay and not feeds.market_open():
-            publish(f"market closed - waiting (checked {now:%H:%M} ET)")
-            time.sleep(60); continue
-        if day != now.date():
-            day, halted, day_start, trades_today = now.date(), False, broker.equity(marks), 0
+        if st["day"] != now.date():
+            st.update(day=now.date(), halted=False, day_start=broker.equity(marks), trades_today=0)
             for sym in a.symbols:
-                strat[sym].new_day(); seen[sym].clear()
+                strat[sym].new_day(); seen[sym].clear(); opens.pop(sym, None)
                 S["charts"][sym] = {"t": [], "c": [], "hod": [], "lod": [], "marks": []}
             log("new trading day - watching for setups")
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=1)
         for sym in a.symbols:
+            if not (a.replay or feeds.market_open(sym)):
+                continue
             try:
-                bars = get(sym)
+                bars = feeds.bars(sym, a.feed)
             except Exception as e:
-                log(f"data error {sym}: {e}"); continue
+                log(f"data error {sym}: {e}", "bad"); continue
             for b in bars:
                 bt = datetime.fromisoformat(b.t.replace("Z", "+00:00"))
                 if b.t in seen[sym] or (not a.replay and bt > cutoff):
                     continue
                 seen[sym].add(b.t)
-                marks[sym] = b.c
+                marks[sym] = b.c; opens.setdefault(sym, b.o)
+                t = bt.astimezone(ET).strftime("%H:%M")
                 ch = S["charts"][sym]
                 with L:
-                    ch["t"].append(bt.astimezone(ET).strftime("%H:%M")); ch["c"].append(b.c)
+                    ch["t"].append(t); ch["c"].append(b.c)
                     ch["hod"].append(max(b.h, ch["hod"][-1]) if ch["hod"] else b.h)
                     ch["lod"].append(min(b.l, ch["lod"][-1]) if ch["lod"] else b.l)
+                    for k in ("t", "c", "hod", "lod"):
+                        del ch[k][:-600]
                 sig = strat[sym].on_bar(b)
                 if sig:
-                    b.t = bt.astimezone(ET).isoformat()
-                    act(sym, b, sig)
-        if a.replay or now.hour * 60 + now.minute >= 950:
-            flatten("end of day flatten")
-        publish("halted for the day (loss limit)" if halted else
-                ("replay finished - dashboard stays up, Ctrl+C to quit" if a.replay else "live - checking every minute"))
+                    act(sym, b, sig, t)
+                if not st["halted"] and broker.equity(marks) < st["day_start"] * (1 - a.max_loss):
+                    st["halted"] = True
+                    log("DAILY LOSS LIMIT HIT - no new trades today", "bad")
+        mins = now.hour * 60 + now.minute
+        for sym in a.symbols:     # ETFs: never hold overnight
+            if not feeds.is_crypto(sym) and sym in marks and (a.replay or mins >= 950):
+                close(sym, marks[sym], "end of day flatten", now.strftime("%H:%M"))
+        if a.replay:
+            for sym in a.symbols:
+                if sym in marks: close(sym, marks[sym], "replay finished", now.strftime("%H:%M"))
+        open_now = [s for s in a.symbols if feeds.market_open(s)]
+        publish("Replay finished" if a.replay else "Halted for the day (loss limit)" if st["halted"] else
+                f"Live - watching {len(open_now)} markets" if open_now else "Markets closed - waiting")
         if a.replay:
             while True: time.sleep(3600)
         time.sleep(60 - datetime.now().second + 3)

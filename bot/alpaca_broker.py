@@ -22,6 +22,14 @@ def account():
 
 
 def enter(sym, qty, side, stop, target):
+    if "/" in sym:   # crypto: Alpaca has no bracket orders, so send market + a separate stop
+        o = _req("POST", "/v2/orders", {"symbol": sym, "qty": str(qty), "side": side,
+                                        "type": "market", "time_in_force": "gtc"})
+        import time; time.sleep(2)
+        _req("POST", "/v2/orders", {"symbol": sym, "qty": str(qty), "side": "sell", "type": "stop_limit",
+                                    "stop_price": round(stop, 2), "limit_price": round(stop * 0.995, 2),
+                                    "time_in_force": "gtc"})
+        return o
     """Bracket order: the stop-loss and take-profit live at Alpaca, so you're protected
     even if your computer or the bot dies mid-trade."""
     return _req("POST", "/v2/orders", {
@@ -32,10 +40,11 @@ def enter(sym, qty, side, stop, target):
 
 
 def exit_all(sym):
-    for o in _req("GET", f"/v2/orders?status=open&symbols={sym}") or []:
+    import urllib.parse
+    for o in _req("GET", f"/v2/orders?status=open&symbols={urllib.parse.quote(sym)}") or []:
         _req("DELETE", f"/v2/orders/{o['id']}")
     try:
-        _req("DELETE", f"/v2/positions/{sym}")
+        _req("DELETE", f"/v2/positions/{sym.replace('/', '')}")
     except RuntimeError as e:
         if "404" not in str(e):
             raise

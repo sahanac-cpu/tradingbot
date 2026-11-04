@@ -15,10 +15,12 @@ Paper trading only.
 
 ## Real-time paper bot
 
+**Step-by-step setup: see [SETUP.md](SETUP.md).**
+
 ![dashboard](dashboard.png)
 
 ```bash
-python -m bot.run                         # SPY + QQQ, $100k fake money, opens http://localhost:8000
+python -m bot.run                         # VOO SPY QQQ IWM DIA + BTC/ETH, $100k fake money, opens http://localhost:8000
 python -m bot.run --broker alpaca         # same, but orders go to your Alpaca PAPER account
 python -m bot.run --replay                # replay today's bars now (after hours)
 python -m bot.report                      # every trade + win rate, drawdown, verdict
@@ -30,7 +32,7 @@ Alpaca paper setup: sign up free at alpaca.markets, open the Paper Trading dashb
 orders, so the stop-loss sits at the broker even if your computer goes off.
 
 Risk-averse defaults: long only, 0.25% of equity risked per trade, max 10% of equity per position,
-max 4 trades/day, trades only 9:50-15:30 ET, stops for the day at -1%, flat by 15:50 ET.
+max 6 trades/day, ETFs only 9:50-15:30 ET and flat by 15:50 ET, crypto 24/7 (long only), stops for the day at -1%.
 Change with `--risk --max-position --max-trades --max-loss --allow-shorts`.
 
 `bot.report` says "ready to consider a small real-money test" only after 40+ trading days,
