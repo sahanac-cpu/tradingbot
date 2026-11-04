@@ -37,3 +37,11 @@ Change with `--risk --max-position --max-trades --max-loss --allow-shorts`.
 
 `bot.report` says "ready to consider a small real-money test" only after 40+ trading days,
 100+ trades, profit factor >= 1.3 and a net profit. This code only ever trades paper.
+
+## The bot's own brain (no Claude, no internet)
+The bot never calls Claude or any AI service while it runs. Its decisions come from:
+1. **Rules** (`bot/strategy.py`) - the game-theory setups.
+2. **A self-learning filter** (`bot/learner.py`) - a small machine-learning model (logistic regression,
+   plain Python) that records 12 facts about every setup and whether the trade won. After 30 trades
+   it skips setups it predicts have under a 45% chance to win. Its memory is saved in `model.json`.
+   See what it learned in the "Bot brain" panel. Turn it off with `--no-learn`; delete `model.json` to reset it.

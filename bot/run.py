@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from .strategy import Strategy
 from .paper import PaperBroker
 from . import feeds, dashboard
+from .learner import Learner, features
 
 ET = ZoneInfo("America/New_York")
 ACCOUNT = "account.json"
@@ -38,6 +39,7 @@ def main():
     ap.add_argument("--replay", action="store_true")
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--no-learn", action="store_true", help="turn off the self-learning filter")
     a = ap.parse_args()
     a.symbols = [s.upper() for s in a.symbols]
     S, L = dashboard.STATE, dashboard.LOCK
@@ -54,6 +56,8 @@ def main():
     def save():
         json.dump({"cash": broker.cash, "start_cash": broker.start_cash}, open(ACCOUNT, "w"))
 
+    brain = Learner()
+    feats = {}
     strat = {s: Strategy() for s in a.symbols}
     seen = {s: set() for s in a.symbols}
     meta, marks, opens = {}, {}, {}
@@ -79,6 +83,10 @@ def main():
             try: alp.exit_all(sym)
             except Exception as e: log(f"{sym} Alpaca exit error: {e}", "bad")
         pnl = broker.fill(sym, -q, px, reason)
+        if sym in feats:
+            x = feats.pop(sym)
+            if not a.replay:   # don't learn the same replayed day over and over
+                brain.learn(x, pnl > 0)
         record(sym, t, "EXIT", abs(q), px, pnl, reason)
         meta.pop(sym, None); strat[sym].pos = None
         log(f"{sym} EXIT {abs(q):g} @ {px:,.2f}  P&L ${pnl:+,.2f}  - {reason}", "win" if pnl > 0 else "loss")
@@ -98,6 +106,12 @@ def main():
         if why:
             strat[sym].pos = None
             return log(f"{sym} skipped ({why}): {sig['reason']}", "skip")
+        x = features(strat[sym], sig, sym, mins - 570 if not crypto else mins)
+        ok, prob, note = brain.decide(x)
+        if not ok and not a.no_learn:
+            strat[sym].pos = None
+            return log(f"{sym} skipped by AI filter ({note}): {sig['reason']}", "skip")
+        sig = dict(sig, reason=f"{sig['reason']} · AI {prob:.0%}")
         eq = broker.equity(marks)
         qty = min(eq * a.risk / max(abs(sig["price"] - sig["stop"]), 1e-9), eq * a.max_position / sig["price"])
         qty = round(qty, 6) if crypto else int(qty)
@@ -111,7 +125,7 @@ def main():
                 return log(f"{sym} Alpaca rejected order: {e}", "bad")
         side = "BUY" if sig["action"] == "buy" else "SHORT"
         broker.fill(sym, qty if side == "BUY" else -qty, sig["price"], sig["reason"])
-        meta[sym] = sig; st["trades_today"] += 1
+        meta[sym] = sig; feats[sym] = x; st["trades_today"] += 1
         record(sym, t, side, qty, sig["price"], 0, sig["reason"])
         log(f"{sym} {side} {qty:g} @ {sig['price']:,.2f}  stop {sig['stop']:,.2f}  target {sig['target']:,.2f}  - {sig['reason']}", "entry")
 
@@ -125,6 +139,8 @@ def main():
             S["stats"] = {"n": len(trades), "win": round(100 * len(wins) / len(trades)) if trades else None,
                           "trades_today": st["trades_today"], "max_trades": a.max_trades, "halted": st["halted"],
                           "risk": a.risk, "max_loss": a.max_loss}
+            S["brain"] = {"n": brain.n, "wins": brain.wins, "min": brain.min_samples, "off": a.no_learn,
+                          "factors": [[f, round(w, 3)] for f, w in brain.top_factors()]}
             S["equity"] = (S["equity"] + [{"t": datetime.now(ET).strftime("%m-%d %H:%M"), "v": round(eq, 2),
                                             "day": round(eq - st["day_start"], 2), "tot": round(eq - broker.start_cash, 2)}])[-2000:]
             S["positions"] = [{"sym": s, "qty": q, "entry": avg, "last": marks.get(s, avg),

@@ -70,7 +70,7 @@ td{padding:8px;border-bottom:1px solid rgba(255,255,255,.04)}tr:last-child td{bo
   <div class="card"><h2>Open positions</h2><div id="pos"></div></div>
   <div class="card"><h2>Trade history</h2><div class="scroll" id="tr"></div></div>
  </div>
- <div class="card"><h2>Live activity - why it does what it does</h2><div class="scroll log" id="log" style="max-height:900px"></div></div>
+ <div class="stack"><div class="card"><h2>Bot brain (self-learning, runs on your computer)</h2><div id="brain"></div></div><div class="card"><h2>Live activity - why it does what it does</h2><div class="scroll log" id="log" style="max-height:700px"></div></div></div>
 </div></div>
 <script>
 const $=id=>document.getElementById(id);
@@ -120,6 +120,10 @@ async function tick(){
  $('tr').innerHTML=s.trades.length?`<table><tr><th>Time</th><th>Symbol</th><th></th><th>Qty</th><th>Price</th><th>P&L</th><th>Reason</th></tr>${s.trades.slice().reverse().map(t=>
   `<tr><td class=sub>${t.t}</td><td><b>${t.sym}</b></td><td><span class="side ${t.side}">${t.side}</span></td><td>${+(+t.qty).toFixed(6)}</td><td>${px(t.px)}</td><td class=${t.side=='EXIT'?cls(t.pnl):''}>${t.side=='EXIT'?sgn(t.pnl):''}</td><td class=sub>${t.reason}</td></tr>`).join('')}</table>`
   :'<div class=empty>No trades yet today</div>';
+ const br=s.brain||{n:0,min:30,factors:[]};const nice={breakout:'Breakout setup',bounce:'Bounce setup',short:'Short trade',crypto:'Crypto',dist_extreme_atr:'Distance below day high',range_pos:'Position in day range',trend_30:'30-min trend',vol_ratio:'Volume picking up',atr_pct:'Market volatility',minutes_open:'Later in the day',bounce_n:'Bounce number',reward_risk:'Reward/risk'};
+ $('brain').innerHTML=`<div class=row style="display:flex;justify-content:space-between"><span class=mid style="font-size:18px">${br.off?'Off':br.n<br.min?'Learning':'Filtering'}</span><span class=sub>${br.n} trades learned · ${br.n?Math.round(100*br.wins/br.n):0}% won</span></div>
+ <div class=bar><i style="width:${Math.min(100,br.n/br.min*100)}%"></i></div><div class=sub style="margin:8px 0 6px">${br.n<br.min?`Takes every setup until it has seen ${br.min} trades, then skips ones it predicts will lose.`:'Skips setups with under 45% predicted win chance.'}</div>
+ ${br.n?br.factors.map(([f,w])=>`<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0"><span>${nice[f]||f}</span><span class=${w>=0?'g':'r'}>${w>=0?'helps':'hurts'} ${Math.abs(w).toFixed(2)}</span></div>`).join(''):''}`;
  $('log').innerHTML=s.log.slice().reverse().map(l=>`<div class="${l.k}">${l.m.replace(/</g,'&lt;')}</div>`).join('');
 }
 tick();setInterval(()=>tick().catch(()=>{$('st').textContent='Bot not running';$('dot').className='dot bad'}),3000);
