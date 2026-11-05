@@ -107,34 +107,34 @@ async function tick(){
  const e=s.equity.at(-1)||{v:0,day:0,tot:0},st=s.stats||{};
  $('eq').textContent=money(e.v);$('tot').innerHTML=`<span class=${cls(e.tot)}>${sgn(e.tot)} all time</span>`;
  $('day').innerHTML=`<span class=${cls(e.day)}>${sgn(e.day)}</span>`;$('dayp').textContent=e.v?((e.day/(e.v-e.day))*100).toFixed(2)+'% today':'';
- $('wr').textContent=st.win==null?'-':st.win+'%';$('nt').textContent=(st.n||0)+' closed trades';
+ $('wr').textContent=st.win==null?'-':st.win+'%';$('nt').innerHTML=(st.n||0)+' real trades'+(st.sim_n?` · ${st.sim_n} simulated (<span class=${cls(st.sim_pnl)}>${sgn(st.sim_pnl)}</span>)`:'');
  $('td').textContent=`${st.trades_today||0} / ${st.max_trades||0}`;$('tdb').style.width=((st.trades_today||0)/(st.max_trades||1)*100)+'%';
  $('ec').innerHTML=area(s.equity.map(x=>x.v),600,70,'#6aa8ff','eg');
- $('brk').textContent=s.broker||'';$('st').textContent=s.status;
+ $('brk').textContent=s.broker||'';$('st').textContent=s.status+(s.updated?' · updated '+s.updated:'');
  $('dot').className='dot'+(s.status.startsWith('Live')?'':s.status.startsWith('Halted')?' bad':' off');
  $('guard').innerHTML=st.halted?'<span class=r>Loss limit hit - no new trades</span>':`Risk ${(st.risk*100).toFixed(2)}%/trade · stop day at -${(st.max_loss*100).toFixed(0)}%`;
  const upl=s.positions.reduce((a,p)=>a+p.pnl,0);$('op').textContent=s.positions.length;$('opp').innerHTML=s.positions.length?`<span class=${cls(upl)}>${sgn(upl)} unrealized</span>`:'flat';
  if(!sel&&s.tickers.length)sel=s.tickers[0].sym;
  $('tick').innerHTML=s.tickers.map(t=>{const c=s.charts[t.sym]||{c:[]},ch=t.last&&t.open?(t.last/t.open-1)*100:null;
-  return`<div class="card tk ${t.sym==sel?'sel':''}" onclick="sel='${t.sym}';tick()"><div class=row><span class=sym>${t.sym}</span><span class="badge ${t.crypto?'':'etf'}">${t.crypto?'CRYPTO 24/7':'ETF'}</span></div>
+  return`<div class="card tk ${t.sym==sel?'sel':''}" onclick="sel='${t.sym}';tick()"><div class=row><span class=sym>${t.sym}</span><span class="badge ${t.crypto?'':'etf'}">${t.sim?'CRYPTO · SIM':t.crypto?'CRYPTO 24/7':'ETF'}</span></div>
   <div class=row style="margin-top:4px"><span class=mid style="font-size:17px">${t.last?'$'+px(t.last):'-'}</span><span class="${ch==null?'sub':cls(ch)}" style="font-size:12.5px;font-weight:600">${ch==null?(t.live?'':'closed'):(ch>=0?'+':'')+ch.toFixed(2)+'%'}</span></div>
   <svg viewBox="0 0 160 34" preserveAspectRatio="none" width=100% height=34>${area(c.c.slice(-120),160,34,ch==null||ch>=0?'#22d39a':'#ff5c7a','s'+t.sym.replace('/',''))}</svg></div>`}).join('');
  if(sel&&s.charts[sel]){$('ctitle').textContent=sel+' · 1-minute';mainChart(s.charts[sel])}
  $('pos').innerHTML=s.positions.length?`<table><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Last</th><th>P&L</th><th>Stop</th><th>Target</th><th>Setup</th></tr>${s.positions.map(p=>
-  `<tr><td><b>${p.sym}</b></td><td>${+p.qty.toFixed(6)}</td><td>${px(p.entry)}</td><td>${px(p.last)}</td><td class=${cls(p.pnl)}><b>${sgn(p.pnl)}</b></td><td class=r>${px(p.stop)}</td><td class=g>${px(p.target)}</td><td class=sub>${p.reason}</td></tr>`).join('')}</table>`
+  `<tr><td><b>${p.sym}</b>${p.sim?' <span class=badge>SIM</span>':''}</td><td>${+p.qty.toFixed(6)}</td><td>${px(p.entry)}</td><td>${px(p.last)}</td><td class=${cls(p.pnl)}><b>${sgn(p.pnl)}</b></td><td class=r>${px(p.stop)}</td><td class=g>${px(p.target)}</td><td class=sub>${p.reason}</td></tr>`).join('')}</table>`
   :'<div class=empty>No open positions - waiting for a setup</div>';
  $('tr').innerHTML=s.trades.length?`<table><tr><th>Time</th><th>Symbol</th><th></th><th>Qty</th><th>Price</th><th>P&L</th><th>Reason</th></tr>${s.trades.slice().reverse().map(t=>
-  `<tr><td class=sub>${t.t}</td><td><b>${t.sym}</b></td><td><span class="side ${t.side}">${t.side}</span></td><td>${+(+t.qty).toFixed(6)}</td><td>${px(t.px)}</td><td class=${t.side=='EXIT'?cls(t.pnl):''}>${t.side=='EXIT'?sgn(t.pnl):''}</td><td class=sub>${t.reason}</td></tr>`).join('')}</table>`
+  `<tr><td class=sub>${t.t}</td><td><b>${t.sym}</b>${t.sim?' <span class=badge>SIM</span>':''}</td><td><span class="side ${t.side}">${t.side}</span></td><td>${+(+t.qty).toFixed(6)}</td><td>${px(t.px)}</td><td class=${t.side=='EXIT'?cls(t.pnl):''}>${t.side=='EXIT'?sgn(t.pnl):''}</td><td class=sub>${t.reason}</td></tr>`).join('')}</table>`
   :'<div class=empty>No trades yet today</div>';
  const br=s.brain||{n:0,min:30,factors:[]};const nice={breakout:'Breakout setup',bounce:'Bounce setup',short:'Short trade',crypto:'Crypto',dist_extreme_atr:'Distance below day high',range_pos:'Position in day range',trend_30:'30-min trend',vol_ratio:'Volume picking up',atr_pct:'Market volatility',minutes_open:'Later in the day',bounce_n:'Bounce number',reward_risk:'Reward/risk'};
  $('brain').innerHTML=`<div class=row style="display:flex;justify-content:space-between"><span class=mid style="font-size:18px">${br.off?'Off':br.n<br.min?'Learning':'Filtering'}</span><span class=sub>${br.n} trades learned · ${br.n?Math.round(100*br.wins/br.n):0}% won</span></div>
- <div class=bar><i style="width:${Math.min(100,br.n/br.min*100)}%"></i></div><div class=sub style="margin:8px 0 6px">${br.n<br.min?`Takes every setup until it has seen ${br.min} trades, then skips ones it predicts will lose.`:'Skips setups with under 45% predicted win chance.'}</div>
+ <div class=bar><i style="width:${Math.min(100,br.n/br.min*100)}%"></i></div><div class=sub style="margin:8px 0 6px">${br.n<br.min?`Learns from real trades and simulated 24/7 crypto trades. Takes every setup until it has seen ${br.min} trades, then skips ones it predicts will lose.`:'Skips setups with under 45% predicted win chance.'}</div>
  ${br.n?br.factors.map(([f,w])=>`<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0"><span>${nice[f]||f}</span><span class=${w>=0?'g':'r'}>${w>=0?'helps':'hurts'} ${Math.abs(w).toFixed(2)}</span></div>`).join(''):''}`;
  const R=s.reviews||[],cnt=k=>R.filter(r=>r.verdict==k).length;
  $('rvsum').innerHTML=R.length?`<span class=g>${cnt('good')} by the book</span><span style="color:var(--b)">${cnt('ok')} ok</span><span style="color:var(--y)">${cnt('loss')} normal loss</span><span class=r>${cnt('mistake')} mistakes</span>`:'';
  const lbl={good:'By the book',ok:'OK',loss:'Normal loss',mistake:'Mistake'};
  $('rv').innerHTML=R.length?R.slice().reverse().map(r=>`<div class=rv><span class="vb v-${r.verdict}">${lbl[r.verdict]}</span>
-  <div><b>${r.sym}</b> <span class=sub>${r.t_in} → ${r.t_out} · ${r.setup.split(' ·')[0]} · exit: ${r.why_out}</span><br>${r.lesson}</div>
+  <div><b>${r.sym}</b>${r.sim?' <span class=badge>SIM</span>':''} <span class=sub>${r.t_in} → ${r.t_out} · ${r.setup.split(' ·')[0]} · exit: ${r.why_out}</span><br>${r.lesson}</div>
   <b class=${cls(r.pnl)}>${sgn(r.pnl)}</b><div class=q>"${r.quote}"</div></div>`).join('')
   :'<div class=empty>Each trade is reviewed 15 minutes after it closes (the bot keeps watching the price to see what happened next).</div>';
  $('log').innerHTML=s.log.slice().reverse().map(l=>`<div class="${l.k}">${l.m.replace(/</g,'&lt;')}</div>`).join('');

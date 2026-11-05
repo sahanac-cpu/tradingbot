@@ -6,3 +6,4 @@ data/
 backtest_*
 logs/
 today.json
+sim_trades.csv

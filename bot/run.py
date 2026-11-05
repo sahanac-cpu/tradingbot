@@ -42,9 +42,14 @@ def main():
     ap.add_argument("--replay", action="store_true")
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--watch", nargs="*", default=["BTC/USD", "ETH/USD"],
+                    help="symbols traded in SIMULATION only (no real orders) so the bot keeps learning 24/7")
     ap.add_argument("--no-learn", action="store_true", help="turn off the self-learning filter")
     a = ap.parse_args()
     a.symbols = [s.upper() for s in a.symbols]
+    a.watch = [s.upper() for s in a.watch if s.upper() not in a.symbols]
+    watch = set(a.watch)
+    allsyms = a.symbols + a.watch
     S, L = dashboard.STATE, dashboard.LOCK
 
     alp = None
@@ -52,6 +57,8 @@ def main():
         from . import alpaca_broker as alp
         a.cash = float(alp.account()["equity"])
     broker = PaperBroker(a.cash)
+    sim = PaperBroker(100_000, log="sim_trades.csv")   # simulation-only account for watch symbols
+    bk = lambda sym: sim if sym in watch else broker
     if os.path.exists(ACCOUNT) and not a.reset and not alp:
         acct = json.load(open(ACCOUNT))
         broker.cash, broker.start_cash = acct["cash"], acct["start_cash"]
@@ -62,8 +69,9 @@ def main():
     brain = Learner()
     reviewer = Reviewer()
     feats = {}
-    strat = {s: Strategy() for s in a.symbols}
-    seen = {s: set() for s in a.symbols}
+    strat = {s: Strategy() for s in allsyms}
+    seen = {s: set() for s in allsyms}
+    shown = {}
     meta, marks, opens = {}, {}, {}
     st = {"halted": False, "day": None, "day_start": broker.cash, "trades_today": 0}
 
@@ -76,7 +84,7 @@ def main():
     def record(sym, t, side, qty, px, pnl, reason):
         with L:
             S["trades"].append({"t": t, "sym": sym, "side": side, "qty": qty, "px": px,
-                                "pnl": round(pnl, 2), "reason": reason})
+                                "pnl": round(pnl, 2), "reason": reason, "sim": sym in watch})
             S["charts"][sym]["marks"].append({"t": t, "px": px, "k": {"BUY": "buy", "SHORT": "sell"}.get(side, "exit")})
 
     def save_today():
@@ -94,13 +102,13 @@ def main():
             save_today()
 
     def close(sym, px, reason, t):
-        q, _ = broker.pos.get(sym, (0, 0))
+        q, _ = bk(sym).pos.get(sym, (0, 0))
         if not q:
             return
-        if alp:
+        if alp and sym not in watch:
             try: alp.exit_all(sym)
             except Exception as e: log(f"{sym} Alpaca exit error: {e}", "bad")
-        pnl = broker.fill(sym, -q, px, reason, CRYPTO_FEE if feeds.is_crypto(sym) else 0.0)
+        pnl = bk(sym).fill(sym, -q, px, reason, CRYPTO_FEE if feeds.is_crypto(sym) else 0.0)
         if sym in feats:
             x = feats.pop(sym)
             if not a.replay:   # don't learn the same replayed day over and over
@@ -110,22 +118,23 @@ def main():
         reviewer.start(sym, {"sym": sym, "t_in": m.get("t", ""), "t_out": t, "setup": m.get("reason", ""),
                              "entry": m.get("price", px), "exit": px, "stop": m.get("stop", px),
                              "target": m.get("target", px), "pnl": round(pnl, 2), "why_out": reason,
-                             "above_high": m.get("above_high", 0)})
+                             "above_high": m.get("above_high", 0), "sim": sym in watch})
         save_today()
         meta.pop(sym, None); strat[sym].pos = None
-        log(f"{sym} EXIT {abs(q):g} @ {px:,.2f}  P&L ${pnl:+,.2f}  - {reason}", "win" if pnl > 0 else "loss")
+        log(f"{'SIM ' if sym in watch else ''}{sym} EXIT {abs(q):g} @ {px:,.2f}  P&L ${pnl:+,.2f}  - {reason}", "win" if pnl > 0 else "loss")
         save()
 
     def act(sym, b, sig, t):
-        q, _ = broker.pos.get(sym, (0, 0))
+        q, _ = bk(sym).pos.get(sym, (0, 0))
+        real = sym not in watch
         crypto = feeds.is_crypto(sym)
         if sig["action"] == "exit":
             return close(sym, sig["price"], sig["reason"], t)
         bt = datetime.fromisoformat(b.t.replace("Z", "+00:00")).astimezone(ET)
         mins = bt.hour * 60 + bt.minute
-        why = ("daily loss limit" if st["halted"] else "already in a trade" if q else
+        why = ("daily loss limit" if st["halted"] and real else "already in a trade" if q else
                "shorts disabled" if sig["action"] == "sell" and (crypto or not a.allow_shorts) else
-               f"max {a.max_trades} trades/day" if st["trades_today"] >= a.max_trades else
+               f"max {a.max_trades} trades/day" if real and st["trades_today"] >= a.max_trades else
                "outside 9:50-15:30 window" if not crypto and not (590 <= mins <= 930) else None)
         if why:
             strat[sym].pos = None
@@ -136,17 +145,17 @@ def main():
             strat[sym].pos = None
             return log(f"{sym} skipped by AI filter ({note}): {sig['reason']}", "skip")
         sig = dict(sig, reason=f"{sig['reason']} · AI {prob:.0%}")
-        eq = broker.equity(marks)
+        eq = bk(sym).equity(marks)
         qty = min(eq * a.risk / max(abs(sig["price"] - sig["stop"]), 1e-9), eq * a.max_position / sig["price"])
         qty = round(qty, 6) if crypto else int(qty)
-        if crypto:   # only take the trade if the target clears fees with room to spare
+        if crypto and real:   # only take the trade if the target clears fees with room to spare
             reward = (sig["target"] - sig["price"]) / sig["price"]
             if reward < 3 * 2 * CRYPTO_FEE:
                 strat[sym].pos = None
                 return log(f"{sym} skipped (target {reward:.2%} away, fees {2*CRYPTO_FEE:.2%}): {sig['reason']}", "skip")
         if qty * sig["price"] < 10:
             strat[sym].pos = None; return
-        if alp:
+        if alp and real:
             try:
                 o = alp.enter(sym, qty, sig["action"], sig["stop"], sig["target"])
                 qty = o.get("held_qty", qty)
@@ -154,21 +163,24 @@ def main():
                 strat[sym].pos = None
                 return log(f"{sym} Alpaca rejected order: {e}", "bad")
         side = "BUY" if sig["action"] == "buy" else "SHORT"
-        broker.fill(sym, qty if side == "BUY" else -qty, sig["price"], sig["reason"], CRYPTO_FEE if crypto else 0.0)
-        meta[sym] = dict(sig, t=t, above_high=-x["dist_extreme_atr"]); feats[sym] = x; st["trades_today"] += 1
+        bk(sym).fill(sym, qty if side == "BUY" else -qty, sig["price"], sig["reason"], CRYPTO_FEE if crypto else 0.0)
+        meta[sym] = dict(sig, t=t, above_high=-x["dist_extreme_atr"]); feats[sym] = x; st["trades_today"] += real
         record(sym, t, side, qty, sig["price"], 0, sig["reason"])
-        log(f"{sym} {side} {qty:g} @ {sig['price']:,.2f}  stop {sig['stop']:,.2f}  target {sig['target']:,.2f}  - {sig['reason']}", "entry")
+        log(f"{'SIM ' if not real else ''}{sym} {side} {qty:g} @ {sig['price']:,.2f}  stop {sig['stop']:,.2f}  target {sig['target']:,.2f}  - {sig['reason']}", "entry")
 
     def publish(status):
         eq = broker.equity(marks)
-        trades = [x for x in S["trades"] if x["side"] == "EXIT"]
+        trades = [x for x in S["trades"] if x["side"] == "EXIT" and not x.get("sim")]
+        simt = [x for x in S["trades"] if x["side"] == "EXIT" and x.get("sim")]
         wins = [x for x in trades if x["pnl"] > 0]
         with L:
             S["status"] = status
             S["broker"] = "Alpaca paper" if alp else "Local fake money"
             S["stats"] = {"n": len(trades), "win": round(100 * len(wins) / len(trades)) if trades else None,
                           "trades_today": st["trades_today"], "max_trades": a.max_trades, "halted": st["halted"],
-                          "risk": a.risk, "max_loss": a.max_loss}
+                          "risk": a.risk, "max_loss": a.max_loss,
+                          "sim_n": len(simt), "sim_pnl": round(sum(x["pnl"] for x in simt), 2)}
+            S["updated"] = datetime.now(ET).strftime("%H:%M:%S")
             S["brain"] = {"n": brain.n, "wins": brain.wins, "min": brain.min_samples, "off": a.no_learn,
                           "factors": [[f, round(w, 3)] for f, w in brain.top_factors()]}
             S["equity"] = (S["equity"] + [{"t": datetime.now(ET).strftime("%m-%d %H:%M"), "v": round(eq, 2),
@@ -176,11 +188,13 @@ def main():
             S["positions"] = [{"sym": s, "qty": q, "entry": avg, "last": marks.get(s, avg),
                                "pnl": round(q * (marks.get(s, avg) - avg), 2), "stop": meta[s]["stop"],
                                "target": meta[s]["target"], "reason": meta[s]["reason"]}
-                              for s, (q, avg) in broker.pos.items() if q and s in meta]
+                              for b_ in (broker, sim) for s, (q, avg) in b_.pos.items() if q and s in meta]
+            for p_ in S["positions"]:
+                p_["sim"] = p_["sym"] in watch
             S["tickers"] = [{"sym": s, "last": marks.get(s), "open": opens.get(s),
-                             "crypto": feeds.is_crypto(s), "live": a.replay or feeds.market_open(s)} for s in a.symbols]
+                             "crypto": feeds.is_crypto(s), "live": a.replay or feeds.market_open(s), "sim": s in watch} for s in allsyms]
 
-    for s in a.symbols:
+    for s in allsyms:
         S["charts"][s] = {"t": [], "c": [], "hod": [], "lod": [], "marks": []}
     dashboard.serve(a.port)
     url = f"http://localhost:{a.port}"
@@ -204,8 +218,8 @@ def main():
                         S["trades"], S["reviews"] = d["trades"], d["reviews"]
                     st["trades_today"] = sum(1 for x in d["trades"] if x["side"] != "EXIT")
                     log(f"restored {len(d['trades'])} trade records from earlier today")
-            for sym in a.symbols:
-                strat[sym].new_day(); seen[sym].clear(); opens.pop(sym, None)
+            for sym in allsyms:
+                strat[sym].new_day(); seen[sym].clear(); opens.pop(sym, None); shown.pop(sym, None)
                 S["charts"][sym] = {"t": [], "c": [], "hod": [], "lod": [], "marks": []}
             for x in S["trades"]:                              # put restored trades back on the charts
                 if x["sym"] in S["charts"]:
@@ -213,8 +227,23 @@ def main():
                                                            "k": {"BUY": "buy", "SHORT": "sell"}.get(x["side"], "exit")})
             log("new trading day - watching for setups")
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=1)
-        for sym in a.symbols:
+        for sym in allsyms:
             if not (a.replay or feeds.market_open(sym)):
+                # market closed: still show the last session's chart (display only, no trading)
+                if time.time() - shown.get(sym, 0) > 600:
+                    shown[sym] = time.time()
+                    try:
+                        last = feeds.yahoo_bars(sym)
+                    except Exception:
+                        last = []
+                    if last:
+                        with L:
+                            S["charts"][sym].update(t=[datetime.fromisoformat(b.t).astimezone(ET).strftime("%H:%M") for b in last],
+                                                    c=[b.c for b in last], hod=[], lod=[])
+                            for b in last:
+                                S["charts"][sym]["hod"].append(max(b.h, S["charts"][sym]["hod"][-1]) if S["charts"][sym]["hod"] else b.h)
+                                S["charts"][sym]["lod"].append(min(b.l, S["charts"][sym]["lod"][-1]) if S["charts"][sym]["lod"] else b.l)
+                        marks[sym], opens[sym] = last[-1].c, last[0].o
                 continue
             try:
                 bars = feeds.bars(sym, a.feed)
@@ -248,13 +277,24 @@ def main():
             if not feeds.is_crypto(sym) and sym in marks and (a.replay or mins >= 950):
                 close(sym, marks[sym], "end of day flatten", now.strftime("%H:%M"))
         if a.replay:
-            for sym in a.symbols:
+            for sym in allsyms:
                 if sym in marks: close(sym, marks[sym], "replay finished", now.strftime("%H:%M"))
             for r in reviewer.finish_all():
                 add_review(r)
-        open_now = [s for s in a.symbols if feeds.market_open(s)]
-        publish("Replay finished" if a.replay else "Halted for the day (loss limit)" if st["halted"] else
-                f"Live - watching {len(open_now)} markets" if open_now else "Markets closed - waiting")
+        etf_open = any(feeds.market_open(s) for s in a.symbols if not feeds.is_crypto(s))
+        if a.replay:
+            status = "Replay finished"
+        elif st["halted"]:
+            status = "Halted for the day (loss limit)"
+        elif etf_open:
+            status = f"Live - trading {len(a.symbols)} symbols" + (f" + simulating {len(a.watch)} crypto" if a.watch else "")
+        else:
+            nxt = now.replace(hour=9, minute=30, second=0, microsecond=0)
+            while nxt <= now or nxt.weekday() >= 5:
+                nxt = (nxt + timedelta(days=1)).replace(hour=9, minute=30)
+            h, m = divmod(int((nxt - now).total_seconds() // 60), 60)
+            status = f"Live - stock market opens in {h}h {m}m" + (f" · simulating {', '.join(a.watch)} 24/7" if a.watch else "")
+        publish(status)
         if a.replay:
             while True: time.sleep(3600)
         time.sleep(60 - datetime.now().second + 3)
