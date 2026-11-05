@@ -5,3 +5,4 @@ model.json
 data/
 backtest_*
 logs/
+today.json

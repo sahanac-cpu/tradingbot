@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-STATE = {"equity": [], "positions": [], "trades": [], "log": [], "charts": {}, "tickers": [], "stats": {}, "status": "Starting", "broker": ""}
+STATE = {"equity": [], "positions": [], "trades": [], "log": [], "charts": {}, "tickers": [], "reviews": [], "stats": {}, "status": "Starting", "broker": ""}
 LOCK = threading.Lock()
 
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -48,6 +48,11 @@ td{padding:8px;border-bottom:1px solid rgba(255,255,255,.04)}tr:last-child td{bo
 .SHORT{background:rgba(255,92,122,.14);color:var(--r)}.EXIT{background:rgba(255,200,97,.14);color:var(--y)}
 .scroll{max-height:340px;overflow:auto}.log div{font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;padding:3px 0;color:#aeb6c4}
 .log .entry{color:var(--b)}.log .win{color:var(--g)}.log .loss,.log .bad{color:var(--r)}.log .skip{color:var(--mut)}
+.rv{display:grid;grid-template-columns:auto 1fr auto;gap:4px 14px;padding:12px 2px;border-bottom:1px solid rgba(255,255,255,.05)}
+.rv:last-child{border-bottom:0}.vb{font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;text-transform:uppercase;align-self:start}
+.v-good{background:rgba(34,211,154,.14);color:var(--g)}.v-ok{background:rgba(106,168,255,.14);color:var(--b)}
+.v-loss{background:rgba(255,200,97,.14);color:var(--y)}.v-mistake{background:rgba(255,92,122,.16);color:var(--r)}
+.q{grid-column:2/4;color:var(--mut);font-style:italic;font-size:12.5px;border-left:2px solid var(--line);padding-left:10px}
 .empty{color:var(--mut);padding:18px 4px;text-align:center}.legend{display:flex;gap:14px;font-size:11.5px;color:var(--mut);text-transform:none;letter-spacing:0;font-weight:500}
 .legend b{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
 @media(max-width:1000px){.kpis{grid-template-columns:1fr 1fr}.kpis .card:first-child{grid-column:1/-1}.grid{grid-template-columns:1fr}}
@@ -68,7 +73,8 @@ td{padding:8px;border-bottom:1px solid rgba(255,255,255,.04)}tr:last-child td{bo
   <div class="card"><h2><span id="ctitle">Chart</span><span class="legend"><span><b style="background:var(--g)"></b>Buy</span><span><b style="background:var(--y)"></b>Exit</span><span><b style="background:transparent;border:1px dashed var(--mut)"></b>Day high / low</span></span></h2>
    <svg id="main" viewBox="0 0 800 300" preserveAspectRatio="none" width="100%" height="300"></svg></div>
   <div class="card"><h2>Open positions</h2><div id="pos"></div></div>
-  <div class="card"><h2>Trade history</h2><div class="scroll" id="tr"></div></div>
+  <div class="card"><h2>Today's trade review - where it went right and wrong <span class="legend" id="rvsum"></span></h2><div id="rv"></div></div>
+  <div class="card"><h2>Today's trades</h2><div class="scroll" id="tr"></div></div>
  </div>
  <div class="stack"><div class="card"><h2>Bot brain (self-learning, runs on your computer)</h2><div id="brain"></div></div><div class="card"><h2>Live activity - why it does what it does</h2><div class="scroll log" id="log" style="max-height:700px"></div></div></div>
 </div></div>
@@ -124,6 +130,13 @@ async function tick(){
  $('brain').innerHTML=`<div class=row style="display:flex;justify-content:space-between"><span class=mid style="font-size:18px">${br.off?'Off':br.n<br.min?'Learning':'Filtering'}</span><span class=sub>${br.n} trades learned · ${br.n?Math.round(100*br.wins/br.n):0}% won</span></div>
  <div class=bar><i style="width:${Math.min(100,br.n/br.min*100)}%"></i></div><div class=sub style="margin:8px 0 6px">${br.n<br.min?`Takes every setup until it has seen ${br.min} trades, then skips ones it predicts will lose.`:'Skips setups with under 45% predicted win chance.'}</div>
  ${br.n?br.factors.map(([f,w])=>`<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0"><span>${nice[f]||f}</span><span class=${w>=0?'g':'r'}>${w>=0?'helps':'hurts'} ${Math.abs(w).toFixed(2)}</span></div>`).join(''):''}`;
+ const R=s.reviews||[],cnt=k=>R.filter(r=>r.verdict==k).length;
+ $('rvsum').innerHTML=R.length?`<span class=g>${cnt('good')} by the book</span><span style="color:var(--b)">${cnt('ok')} ok</span><span style="color:var(--y)">${cnt('loss')} normal loss</span><span class=r>${cnt('mistake')} mistakes</span>`:'';
+ const lbl={good:'By the book',ok:'OK',loss:'Normal loss',mistake:'Mistake'};
+ $('rv').innerHTML=R.length?R.slice().reverse().map(r=>`<div class=rv><span class="vb v-${r.verdict}">${lbl[r.verdict]}</span>
+  <div><b>${r.sym}</b> <span class=sub>${r.t_in} → ${r.t_out} · ${r.setup.split(' ·')[0]} · exit: ${r.why_out}</span><br>${r.lesson}</div>
+  <b class=${cls(r.pnl)}>${sgn(r.pnl)}</b><div class=q>"${r.quote}"</div></div>`).join('')
+  :'<div class=empty>Each trade is reviewed 15 minutes after it closes (the bot keeps watching the price to see what happened next).</div>';
  $('log').innerHTML=s.log.slice().reverse().map(l=>`<div class="${l.k}">${l.m.replace(/</g,'&lt;')}</div>`).join('');
 }
 tick();setInterval(()=>tick().catch(()=>{$('st').textContent='Bot not running';$('dot').className='dot bad'}),3000);

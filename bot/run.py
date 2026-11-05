@@ -18,9 +18,11 @@ from .strategy import Strategy
 from .paper import PaperBroker
 from . import feeds, dashboard
 from .learner import Learner, features
+from .review import Reviewer
 
 ET = ZoneInfo("America/New_York")
 ACCOUNT = "account.json"
+TODAY = "today.json"   # today's trades + reviews, survives restarts
 DEFAULT = ["VOO", "SPY", "QQQ", "IWM", "DIA"]   # crypto off by default: fees > 1-min targets
 CRYPTO_FEE = 0.0025                              # Alpaca crypto fee per side
 
@@ -58,6 +60,7 @@ def main():
         json.dump({"cash": broker.cash, "start_cash": broker.start_cash}, open(ACCOUNT, "w"))
 
     brain = Learner()
+    reviewer = Reviewer()
     feats = {}
     strat = {s: Strategy() for s in a.symbols}
     seen = {s: set() for s in a.symbols}
@@ -76,6 +79,20 @@ def main():
                                 "pnl": round(pnl, 2), "reason": reason})
             S["charts"][sym]["marks"].append({"t": t, "px": px, "k": {"BUY": "buy", "SHORT": "sell"}.get(side, "exit")})
 
+    def save_today():
+        if a.replay:
+            return
+        with L:
+            d = {"date": str(st["day"]), "trades": S["trades"], "reviews": S["reviews"]}
+        json.dump(d, open(TODAY, "w"))
+
+    def add_review(r):
+        if r:
+            with L:
+                S["reviews"].append(r)
+            log(f"{r['sym']} REVIEW [{r['verdict'].upper()}] {r['lesson']}", "win" if r["verdict"] in ("good", "ok") else "loss")
+            save_today()
+
     def close(sym, px, reason, t):
         q, _ = broker.pos.get(sym, (0, 0))
         if not q:
@@ -89,6 +106,12 @@ def main():
             if not a.replay:   # don't learn the same replayed day over and over
                 brain.learn(x, pnl > 0)
         record(sym, t, "EXIT", abs(q), px, pnl, reason)
+        m = meta.get(sym, {})
+        reviewer.start(sym, {"sym": sym, "t_in": m.get("t", ""), "t_out": t, "setup": m.get("reason", ""),
+                             "entry": m.get("price", px), "exit": px, "stop": m.get("stop", px),
+                             "target": m.get("target", px), "pnl": round(pnl, 2), "why_out": reason,
+                             "above_high": m.get("above_high", 0)})
+        save_today()
         meta.pop(sym, None); strat[sym].pos = None
         log(f"{sym} EXIT {abs(q):g} @ {px:,.2f}  P&L ${pnl:+,.2f}  - {reason}", "win" if pnl > 0 else "loss")
         save()
@@ -132,7 +155,7 @@ def main():
                 return log(f"{sym} Alpaca rejected order: {e}", "bad")
         side = "BUY" if sig["action"] == "buy" else "SHORT"
         broker.fill(sym, qty if side == "BUY" else -qty, sig["price"], sig["reason"], CRYPTO_FEE if crypto else 0.0)
-        meta[sym] = sig; feats[sym] = x; st["trades_today"] += 1
+        meta[sym] = dict(sig, t=t, above_high=-x["dist_extreme_atr"]); feats[sym] = x; st["trades_today"] += 1
         record(sym, t, side, qty, sig["price"], 0, sig["reason"])
         log(f"{sym} {side} {qty:g} @ {sig['price']:,.2f}  stop {sig['stop']:,.2f}  target {sig['target']:,.2f}  - {sig['reason']}", "entry")
 
@@ -169,10 +192,25 @@ def main():
     while True:
         now = datetime.now(ET)
         if st["day"] != now.date():
+            for r in reviewer.finish_all():
+                add_review(r)
             st.update(day=now.date(), halted=False, day_start=broker.equity(marks), trades_today=0)
+            with L:
+                S["trades"], S["reviews"] = [], []
+            if not a.replay and os.path.exists(TODAY):        # restarted mid-day: bring back today's trades
+                d = json.load(open(TODAY))
+                if d.get("date") == str(now.date()):
+                    with L:
+                        S["trades"], S["reviews"] = d["trades"], d["reviews"]
+                    st["trades_today"] = sum(1 for x in d["trades"] if x["side"] != "EXIT")
+                    log(f"restored {len(d['trades'])} trade records from earlier today")
             for sym in a.symbols:
                 strat[sym].new_day(); seen[sym].clear(); opens.pop(sym, None)
                 S["charts"][sym] = {"t": [], "c": [], "hod": [], "lod": [], "marks": []}
+            for x in S["trades"]:                              # put restored trades back on the charts
+                if x["sym"] in S["charts"]:
+                    S["charts"][x["sym"]]["marks"].append({"t": x["t"], "px": x["px"],
+                                                           "k": {"BUY": "buy", "SHORT": "sell"}.get(x["side"], "exit")})
             log("new trading day - watching for setups")
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=1)
         for sym in a.symbols:
@@ -197,6 +235,7 @@ def main():
                     for k in ("t", "c", "hod", "lod"):
                         del ch[k][:-600]
                 sig = strat[sym].on_bar(b)
+                add_review(reviewer.on_bar(sym, b))
                 if sig and not a.replay and bt < started - timedelta(minutes=2):
                     strat[sym].pos = None      # warm-up on old bars: learn the day, don't trade it
                 elif sig:
@@ -211,6 +250,8 @@ def main():
         if a.replay:
             for sym in a.symbols:
                 if sym in marks: close(sym, marks[sym], "replay finished", now.strftime("%H:%M"))
+            for r in reviewer.finish_all():
+                add_review(r)
         open_now = [s for s in a.symbols if feeds.market_open(s)]
         publish("Replay finished" if a.replay else "Halted for the day (loss limit)" if st["halted"] else
                 f"Live - watching {len(open_now)} markets" if open_now else "Markets closed - waiting")
