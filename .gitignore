@@ -4,3 +4,4 @@ __pycache__/
 model.json
 data/
 backtest_*
+logs/

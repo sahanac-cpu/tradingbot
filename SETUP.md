@@ -61,3 +61,19 @@ python3 -m bot.report --alpaca
 Lists every trade with entry, exit and P&L, then win rate, profit factor, worst drawdown and a verdict.
 It only says "consider a small real-money test" after 40+ trading days, 100+ trades,
 profit factor >= 1.3 and a net profit.
+
+## 8. Run it in the background forever (Mac)
+So it keeps running and learning with VS Code and the terminal closed:
+```
+bash scripts/install_mac.sh
+```
+It asks for your Alpaca paper keys once, then runs as a background service: it starts when you
+log in, restarts itself if it crashes, and keeps the Mac awake. Its brain (`model.json`) keeps
+learning across restarts.
+- Is it running? `bash ~/tradingbot-service/scripts/status.sh`
+- Dashboard: http://localhost:8000
+- Get new code + restart: `bash scripts/update_mac.sh`
+- Stop it: `bash ~/tradingbot-service/scripts/uninstall_mac.sh`
+- Changed your keys: `bash scripts/install_mac.sh --new-keys`
+
+It stops only if the Mac is shut down, logged out, or the lid is closed while on battery.
