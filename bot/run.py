@@ -52,6 +52,7 @@ def main():
     ap.add_argument("--no-learn", action="store_true")
     ap.add_argument("--no-backfill", action="store_true")
     a = ap.parse_args()
+    from .envfile import load; load()
     a.symbols = [s.upper() for s in a.symbols]
     a.watch = [s.upper() for s in a.watch if s.upper() not in a.symbols]
     watch, allsyms = set(a.watch), a.symbols + a.watch
@@ -222,8 +223,9 @@ def main():
             S["stats"] = {"n": len(ex), "win": round(100 * sum(x["pnl"] > 0 for x in ex) / len(ex)) if ex else None,
                           "trades_today": st["trades_today"], "max_trades": a.max_trades, "halted": st["halted"],
                           "risk": a.risk, "max_loss": a.max_loss}
-            g = brains[st["champion"]]
-            S["brain"] = {"n": g.n, "wins": g.wins, "min": g.min_samples, "off": a.no_learn, "name": st["champion"],
+            bn = st["champion"] or names[0]
+            g = brains[bn]
+            S["brain"] = {"n": g.n, "wins": g.wins, "min": g.min_samples, "off": a.no_learn, "name": bn,
                           "factors": [[f, round(w, 3)] for f, w in g.top_factors()]}
             S["equity"] = (S["equity"] + [{"t": datetime.now(ET).strftime("%m-%d %H:%M"), "v": round(eq, 2),
                                             "day": round(eq - st["day_start"], 2),
@@ -269,8 +271,6 @@ def main():
             with L:
                 S["trades"], S["reviews"] = old["trades"], old["reviews"]
             st["trades_today"] = sum(1 for x in old["trades"] if x["side"] == "BUY" and x["account"] == "real")
-            if not a.champion and old.get("champion"):
-                st["champion"], st["note"] = old["champion"], old.get("champion_note", "")
             log(f"restored {len(old['trades'])} trade records from earlier today")
         for k in strat:
             strat[k].new_day()
@@ -281,7 +281,7 @@ def main():
             if x["sym"] in S["charts"]:
                 S["charts"][x["sym"]]["marks"].append({"t": x["t"], "px": x["px"], "strategy": x["strategy"],
                                                        "account": x["account"], "k": "buy" if x["side"] == "BUY" else "exit"})
-        log(f"new day - CHAMPION: {st['champion']} ({st['note']})")
+        log(f"new day - CHAMPION: {st['champion'] or 'none (sitting out)'} ({st['note']})")
 
     # ---------------------------------------------------------------- start
     for s_ in allsyms:

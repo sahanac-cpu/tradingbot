@@ -148,7 +148,7 @@ function render(){const s=last;if(!s)return;
  $('brk').textContent=s.broker||'';$('st').textContent=s.status+(s.updated?' · updated '+s.updated:'');
  $('dot').className='dot'+(s.status.startsWith('Live')?'':s.status.startsWith('Halted')?' bad':' off');
  $('guard').innerHTML=st.halted?'<span class=r>Loss limit hit - no new real trades</span>':`Real: risk ${(st.risk*100).toFixed(2)}%/trade · stop day at -${(st.max_loss*100).toFixed(0)}%`;
- $('champ').textContent=s.champion?s.champion.name:'-';$('cnote').textContent=s.champion?'- '+s.champion.note:'';
+ $('champ').textContent=s.champion?(s.champion.name||'No champion - real account sitting out'):'-';$('cnote').textContent=s.champion?'- '+s.champion.note:'';
  const P=s.positions.filter(pass),upl=s.positions.filter(p=>p.account=='real').reduce((a,p)=>a+p.pnl,0);
  $('op').textContent=s.positions.filter(p=>p.account=='real').length;$('opp').innerHTML=`<span class=${cls(upl)}>${sgn(upl)} real unrealized</span> · ${s.positions.filter(p=>p.account=='sim').length} sim`;
  $('lb').innerHTML=`<table class=lb><tr><th></th><th>Strategy</th><th>Today (sim)</th><th>Trades</th><th>Win</th><th>Open</th><th>10-day (sim)</th><th>Learned from</th></tr>${(s.board||[]).slice().sort((a,b)=>b.ten-a.ten).map(b=>

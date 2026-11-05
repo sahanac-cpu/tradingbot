@@ -69,6 +69,9 @@ def pick_champion(today):
         return STRATEGIES[0].name, tot, "not enough history yet - Game Theory trades by default"
     best = max(ok, key=lambda k: ok[k]["pnl"])
     v = ok[best]
+    if v["pnl"] <= 0:   # risk-averse: never hand real money to a losing strategy
+        return None, tot, (f"no strategy made money over the last {LOOKBACK} days (best: {best} "
+                           f"${v['pnl']:+,.0f}) - real account sits out today, all strategies keep simulating")
     return best, tot, (f"{best} made ${v['pnl']:+,.0f} over the last {v['days']} days "
                        f"({v['n']} simulated trades, {100 * v['wins'] / max(v['n'], 1):.0f}% won) - best of all strategies")
 

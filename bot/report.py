@@ -42,6 +42,7 @@ def rows_from_alpaca():
 
 
 def main():
+    from .envfile import load; load()
     t = rows_from_alpaca() if "--alpaca" in sys.argv else rows_from_csv()
     if not t:
         return print("no completed trades yet")

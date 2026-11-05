@@ -223,6 +223,7 @@ def main():
     ap.add_argument("--days", type=int, default=360)
     ap.add_argument("--synthetic", action="store_true")
     a = ap.parse_args()
+    from .envfile import load; load()
     syms = [s.upper() for s in a.symbols]
 
     print(f"loading {a.days} days of 1-minute bars for {', '.join(syms)}")
