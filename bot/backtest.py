@@ -34,9 +34,15 @@ SLIP, CRYPTO_FEE = 0.0001, 0.0025
 MAX_TRADES_PER_SYMBOL = 2
 
 # ------------------------------------------------------------------ data
-def _get(url):
-    h = {"APCA-API-KEY-ID": os.environ.get("APCA_API_KEY_ID", ""),
-         "APCA-API-SECRET-KEY": os.environ.get("APCA_API_SECRET_KEY", ""), "User-Agent": "tradingbot"}
+class DataDenied(Exception):
+    pass
+
+
+def _get(url, auth=True):
+    h = {"User-Agent": "Mozilla/5.0"}
+    if auth:
+        h.update({"APCA-API-KEY-ID": os.environ.get("APCA_API_KEY_ID", ""),
+                  "APCA-API-SECRET-KEY": os.environ.get("APCA_API_SECRET_KEY", "")})
     for attempt in range(5):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=30) as f:
@@ -44,12 +50,39 @@ def _get(url):
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 time.sleep(3 * (attempt + 1)); continue
-            raise SystemExit(f"Alpaca error {e.code}: {e.read().decode()[:200]}\n"
-                             "Did you set APCA_API_KEY_ID / APCA_API_SECRET_KEY in this terminal?")
+            if e.code in (401, 403):
+                raise DataDenied(f"{e.code}: {e.read().decode()[:150].strip()}")
+            raise SystemExit(f"data error {e.code}: {e.read().decode()[:200]}")
     raise SystemExit("Alpaca kept rate-limiting; wait a minute and rerun (downloads are cached).")
 
 
+def yahoo_5m(sym, path):
+    """Backup source: Yahoo 5-minute bars for the last 60 days (no account needed)."""
+    d = _get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=5m&range=60d", auth=False)
+    r = d["chart"]["result"][0]; q = r["indicators"]["quote"][0]
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f); w.writerow(["t", "o", "h", "l", "c", "v"])
+        for i, ts in enumerate(r.get("timestamp") or []):
+            if None not in (q["open"][i], q["high"][i], q["low"][i], q["close"][i]):
+                w.writerow([datetime.fromtimestamp(ts, timezone.utc).isoformat(), q["open"][i], q["high"][i],
+                            q["low"][i], q["close"][i], q["volume"][i] or 0])
+    return path
+
+
 def download(sym, days):
+    try:
+        return _download(sym, days)
+    except DataDenied as e:
+        if is_crypto(sym):
+            raise SystemExit(f"Alpaca crypto data refused ({e})")
+        path = f"data/{sym}_yahoo5m.csv"
+        if not os.path.exists(path):
+            print(f"  Alpaca historical data refused ({e}) - using Yahoo 5-minute bars for the last 60 days instead")
+            yahoo_5m(sym, path)
+        return path
+
+
+def _download(sym, days):
     os.makedirs("data", exist_ok=True)
     path = f"data/{sym.replace('/', '-')}_{days}d.csv"
     if os.path.exists(path):
@@ -66,7 +99,7 @@ def download(sym, days):
     with open(path + ".tmp", "w", newline="") as f:
         w = csv.writer(f); w.writerow(["t", "o", "h", "l", "c", "v"])
         while True:
-            d = _get(base + urllib.parse.urlencode(q))
+            d = _get(base + urllib.parse.urlencode(q), auth=not is_crypto(sym))
             bars = d["bars"].get(sym, []) if is_crypto(sym) else (d.get("bars") or [])
             for b in bars:
                 w.writerow([b["t"], b["o"], b["h"], b["l"], b["c"], b["v"]])
@@ -75,6 +108,8 @@ def download(sym, days):
             if not d.get("next_page_token"):
                 break
             q["page_token"] = d["next_page_token"]
+        if n == 0 and not is_crypto(sym):
+            raise DataDenied("no bars returned")
     os.replace(path + ".tmp", path)
     print()
     return path
