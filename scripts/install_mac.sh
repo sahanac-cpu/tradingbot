@@ -17,7 +17,7 @@ echo "== Trading bot background installer =="
 mkdir -p "$DEST"
 # keep the service's own memory: never overwrite its model, account, trades or logs
 rsync -a --exclude logs --exclude model.json --exclude account.json --exclude trades.csv \
-  --exclude data --exclude "backtest_*" "$SRC/" "$DEST/"
+  --exclude data --exclude "backtest_*" --exclude history --exclude "model_*.json" --exclude "arena_*.csv" --exclude today.json --exclude sim_trades.csv "$SRC/" "$DEST/"
 echo "bot copied to $DEST"
 
 if [ ! -f "$ENVF" ] || [ "$1" = "--new-keys" ]; then

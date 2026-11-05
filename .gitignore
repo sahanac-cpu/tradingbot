@@ -7,3 +7,6 @@ backtest_*
 logs/
 today.json
 sim_trades.csv
+history/
+model_*.json
+arena_*.csv

@@ -108,14 +108,16 @@ def synthetic(sym, n_days):
     return out
 
 # ------------------------------------------------------------------ simulation
-def simulate(data, params, learner=None, use_filter=False, learn=False):
+def simulate(data, params=None, learner=None, use_filter=False, learn=False, cls=None, cap=None):
     """data = {sym: {date: [bars]}}. Returns list of trade dicts. Mirrors bot.run's rules."""
     trades = []
     for sym, days in data.items():
         crypto = is_crypto(sym)
         fee = CRYPTO_FEE if crypto else 0.0
         for date, bars in days.items():
-            s, n_today, open_t = Strategy(p=params), 0, None
+            C = cls or Strategy
+            s = C() if params is None else C(p=params)
+            n_today, open_t = 0, None
             for b in bars:
                 t = datetime.fromisoformat(b.t)
                 mins = t.hour * 60 + t.minute
@@ -138,7 +140,7 @@ def simulate(data, params, learner=None, use_filter=False, learn=False):
                     trades.append(open_t); open_t, s.pos = None, None
                     continue
                 # entry signal - same filters as the live bot
-                skip = (sig["action"] == "sell" or n_today >= MAX_TRADES_PER_SYMBOL or
+                skip = (sig["action"] == "sell" or n_today >= (cap or MAX_TRADES_PER_SYMBOL) or
                         (not crypto and not (590 <= mins <= 930)))
                 x = None
                 if not skip and learner:
@@ -155,6 +157,7 @@ def simulate(data, params, learner=None, use_filter=False, learn=False):
                     s.pos = None; continue
                 n_today += 1
                 open_t = {"sym": sym, "date": str(date), "time": b.t[11:16], "setup": sig["reason"].split(" #")[0],
+                          "strategy": s.name, "why": sig.get("why", ""), "reason": sig["reason"],
                           "entry": entry, "qty": qty, "stop": sig["stop"], "target": sig["target"], "_x": x}
             if open_t:                                                    # close at last bar
                 px = bars[-1].c * (1 - SLIP)
@@ -273,6 +276,12 @@ def main():
     say("   by hour (ET):")
     for k, s in breakdown(final, lambda t: t["time"][:2]).items():
         say(f"     {k + ':00':<24}" + fmt(s))
+
+    from .quant import STRATEGIES
+    say("\n5) STRATEGY COMPARISON (default settings, same costs)")
+    for C in STRATEGIES:
+        say(f"   {C.name:<16} train " + fmt(stats(simulate(train, cls=C, cap=3))))
+        say(f"   {'':<16} test  " + fmt(stats(simulate(test, cls=C, cap=3))))
 
     with open("backtest_trades.csv", "w", newline="") as f:
         cols = ["sym", "date", "time", "setup", "entry", "stop", "target", "exit", "exit_time", "why_out", "qty", "pnl"]

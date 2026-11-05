@@ -25,6 +25,39 @@ QUOTES = {
 }
 
 
+QUANT_QUOTES = {
+    "Mean Reversion": "Prices stretched far from their average tend to snap back - unless a real trend has started.",
+    "Momentum": "Strong moves with volume behind them tend to keep going - until the volume dries up.",
+    "Trend Pullback": "The trend is your friend: buy dips in an uptrend, cut it fast if the trend breaks.",
+}
+
+
+def judge_quant(r, after):
+    n = r.get("strategy", "")
+    entry, exitp, stop, target = r["entry"], r["exit"], r["stop"], r["target"]
+    risk = max(entry - stop, 1e-9)
+    hi = max(after) if after else exitp
+    lo = min(after) if after else exitp
+    won, why = r["pnl"] > 0, r["why_out"]
+    if "end of day" in why or "rollover" in why or "finished" in why:
+        return ("ok" if won else "loss", "Closed at the end of the day as planned.")
+    if why == "stop" and hi >= target:
+        return ("mistake", f"Stopped out, then price reached the target within {WATCH_BARS} min - stop too tight for this market's noise.")
+    if why == "stop":
+        lessons = {"Mean Reversion": "Price kept falling instead of snapping back - this was a trend day, and mean reversion loses on trend days.",
+                   "Momentum": "False breakout: price broke the opening range but buyers didn't follow through.",
+                   "Trend Pullback": "The dip kept going - the uptrend broke rather than continued."}
+        return ("loss", lessons.get(n, "Normal loss - the stop kept it small."))
+    if "time-stop" in why:
+        return (("mistake", "Gave up too early - the move came after the time-stop.") if hi >= target
+                else ("ok", "Good scratch - nothing happened, got out near break-even."))
+    if won and hi > target + risk:
+        return ("ok", f"Won, but price kept going {(hi - exitp) / risk:.1f}R past the exit - a trailing stop would have caught more.")
+    if won:
+        return ("good", "Worked as designed: entry signal, then the target was hit.")
+    return ("loss", "Small loss after momentum faded.")
+
+
 def judge(r, after):
     """r = closed trade info, after = closes of the next bars. Returns (verdict, lesson, quote_key)."""
     entry, exitp, stop, target = r["entry"], r["exit"], r["stop"], r["target"]
@@ -88,8 +121,13 @@ class Reviewer:
         r = self.pending.pop(sym, None)
         if not r:
             return None
-        v, lesson, q = judge(r, r.pop("after"))
-        r.update(verdict=v, lesson=lesson, quote=QUOTES[q])
+        after = r.pop("after")
+        if r.get("strategy", "Game Theory") != "Game Theory":
+            v, lesson = judge_quant(r, after)
+            r.update(verdict=v, lesson=lesson, quote=QUANT_QUOTES.get(r["strategy"], ""))
+        else:
+            v, lesson, q = judge(r, after)
+            r.update(verdict=v, lesson=lesson, quote=QUOTES[q])
         return r
 
     def finish_all(self):

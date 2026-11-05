@@ -2,7 +2,7 @@
 free crypto feed (no keys needed). Crypto symbols look like BTC/USD."""
 from __future__ import annotations
 import json, os, urllib.request, urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from .strategy import Bar
 
@@ -28,8 +28,8 @@ def _start(h=9, m=30):
     return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def yahoo_bars(sym):
-    d = _get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1m&range=1d")["chart"]["result"][0]
+def yahoo_bars(sym, rng="1d"):
+    d = _get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1m&range={rng}")["chart"]["result"][0]
     q = d["indicators"]["quote"][0]
     out = []
     for i, ts in enumerate(d.get("timestamp") or []):
@@ -45,11 +45,12 @@ def alpaca_bars(sym):
     return [Bar(b["t"], b["o"], b["h"], b["l"], b["c"], b["v"]) for b in d.get("bars") or []]
 
 
-def crypto_bars(sym):
+def crypto_bars(sym, days_back=0):
     """Bars since midnight ET (crypto never closes, so the 'day' runs midnight to midnight)."""
     out, token = [], None
+    start = (datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_back))
     while True:
-        q = {"symbols": sym, "timeframe": "1Min", "start": _start(0, 0), "limit": 1000}
+        q = {"symbols": sym, "timeframe": "1Min", "start": start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": 10000}
         if token:
             q["page_token"] = token
         d = _get("https://data.alpaca.markets/v1beta3/crypto/us/bars?" + urllib.parse.urlencode(q))

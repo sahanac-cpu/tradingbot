@@ -58,6 +58,10 @@ class Position:
 
 @dataclass
 class Strategy:
+    """Game Theory strategy (from the transcript). Other strategies subclass this and
+    override entries(); stops, targets, exits and the volume profile are shared."""
+    name = "Game Theory"
+    target_label = "target (into resistance)"
     p: Params = field(default_factory=Params)
     bars: list = field(default_factory=list)
     profile: dict = field(default_factory=lambda: defaultdict(float))
@@ -66,12 +70,23 @@ class Strategy:
     bounce_count: int = 0
     hod: float = float('-inf')
     lod: float = float('inf')
+    pv: float = 0.0
+    vv: float = 0.0
 
     # ---------- helpers ----------
     def atr(self):
         b = self.bars[-self.p.atr_len - 1:]
         trs = [max(x.h - x.l, abs(x.h - y.c), abs(x.l - y.c)) for y, x in zip(b, b[1:])]
         return sum(trs) / len(trs) if trs else 0.0
+
+    def vwap(self):
+        return self.pv / self.vv if self.vv else self.bars[-1].c
+
+    def ema(self, n):
+        k, e = 2 / (n + 1), self.bars[max(0, len(self.bars) - 4 * n)].c
+        for b in self.bars[max(0, len(self.bars) - 4 * n):]:
+            e = b.c * k + e * (1 - k)
+        return e
 
     def bucket(self, price):
         tick = self.bars[0].c * self.p.profile_tick
@@ -93,21 +108,29 @@ class Strategy:
         self.hod, self.lod = max(self.hod, bar.h), min(self.lod, bar.l)
         self.bars.append(bar)
         self.profile[self.bucket((bar.h + bar.l + bar.c) / 3)] += bar.v
+        self.pv += (bar.h + bar.l + bar.c) / 3 * bar.v; self.vv += bar.v
         if len(self.bars) < self.p.min_bars:
             return None
         atr = self.atr() or 1e-9
         if self.pos:
             return self._manage(bar, atr)
+        return self.entries(bar, hod, lod, atr)
+
+    def entries(self, bar, hod, lod, atr):
         return self._breakout(bar, hod, lod, atr) or self._bounce(bar, atr)
 
-    def _enter(self, side, price, stop, atr, reason):
-        node = self.next_volume_node(price, side)
-        tgt = price + side * self.p.target_atr * atr
-        if node is not None and abs(node - price) > atr:   # exit into the next wall
-            tgt = node if side * (node - tgt) < 0 else tgt
+    def _enter(self, side, price, stop, atr, reason, target=None, why=""):
+        if target is None:
+            node = self.next_volume_node(price, side)
+            tgt = price + side * self.p.target_atr * atr
+            if node is not None and abs(node - price) > atr:   # exit into the next wall
+                tgt = node if side * (node - tgt) < 0 else tgt
+        else:
+            tgt = target
         self.pos = Position(side, price, stop, tgt, best=price, reason=reason)
         return {"action": "buy" if side > 0 else "sell", "price": price,
-                "stop": round(stop, 4), "target": round(tgt, 4), "reason": reason}
+                "stop": round(stop, 4), "target": round(tgt, 4), "reason": reason,
+                "strategy": self.name, "why": why}
 
     def _breakout(self, bar, hod, lod, atr):
         coil = self.bars[-self.p.coil_bars:]
@@ -122,7 +145,12 @@ class Strategy:
                     stop = (min(b.l for b in coil) if side > 0 else max(b.h for b in coil))
                     stop -= side * 0.25 * atr
                     return self._enter(side, bar.c, stop, atr,
-                                       "anticipate HOD break" if side > 0 else "anticipate LOD break")
+                                       "anticipate HOD break" if side > 0 else "anticipate LOD break",
+                                       why=f"Price coiled in a {rng / atr:.1f}-ATR range for {len(coil)} min just "
+                                           f"{'under the high' if side > 0 else 'over the low'} of day with "
+                                           f"{'higher lows' if side > 0 else 'lower highs'}. Buying BEFORE the break "
+                                           "(transcript: 'anticipate the breakout, don't chase') so the stop run pays "
+                                           "us instead of trapping us.")
         return None
 
     def _bounce(self, bar, atr):
@@ -140,7 +168,10 @@ class Strategy:
         self.bounce_count += 1
         if self.bounce_count > self.p.max_bounces:
             return None                                       # 3rd test: the trap
-        return self._enter(1, bar.c, low - 0.25 * atr, atr, f"flush bounce #{self.bounce_count}")
+        return self._enter(1, bar.c, low - 0.25 * atr, atr, f"flush bounce #{self.bounce_count}",
+                           why=f"Price flushed {(top - low) / atr:.1f} ATR on {max(b.v for b in w) / avg_v:.1f}x volume, "
+                               f"then printed a reversal bar. Taking bounce #{self.bounce_count} while shorts cover "
+                               "(transcript: 'catch the first bounce, maybe the second, avoid the third').")
 
     def _manage(self, bar, atr):
         p = self.pos
@@ -151,7 +182,7 @@ class Strategy:
         if (bar.l <= p.stop) if s > 0 else (bar.h >= p.stop):
             exit_px, why = p.stop, "stop"
         elif (bar.h >= p.target) if s > 0 else (bar.l <= p.target):
-            exit_px, why = p.target, "target (into resistance)"
+            exit_px, why = p.target, self.target_label
         elif (p.best - p.entry) * s > atr and (bar.c - self.bars[-2].c) * s < 0 \
                 and (p.best - bar.c) * s > 0.5 * atr:
             exit_px, why = bar.c, "momentum stalled - take the money"
@@ -167,3 +198,4 @@ class Strategy:
         self.bars.clear(); self.profile.clear()
         self.pos = None; self.bounce_low = None; self.bounce_count = 0
         self.hod, self.lod = float('-inf'), float('inf')
+        self.pv = self.vv = 0.0
