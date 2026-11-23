@@ -127,6 +127,36 @@ def load_days(path, sym):
     return dict(sorted(days.items()))
 
 
+def resample(data, minutes):
+    """Turn 1-minute (or 5-minute) days into N-minute bars."""
+    if minutes <= 1:
+        return data
+    out = {}
+    for sym, days in data.items():
+        out[sym] = {}
+        for d, bars in days.items():
+            groups = defaultdict(list)
+            for b in bars:
+                t = datetime.fromisoformat(b.t)
+                groups[(t.hour * 60 + t.minute) // minutes].append(b)
+            out[sym][d] = [Bar(g[0].t, g[0].o, max(x.h for x in g), min(x.l for x in g), g[-1].c, sum(x.v for x in g))
+                           for _, g in sorted(groups.items())]
+    return out
+
+
+def buy_and_hold(test):
+    """Benchmark: put the same $10k per ETF in on the first test day and just hold."""
+    pnl, parts = 0.0, []
+    for sym, days in test.items():
+        if is_crypto(sym) or not days:
+            continue
+        ds = sorted(days)
+        first, last = days[ds[0]][0].o, days[ds[-1]][-1].c
+        p = MAX_NOTIONAL / first * (last - first)
+        pnl += p; parts.append(f"{sym} {100 * (last / first - 1):+.1f}%")
+    return pnl, parts
+
+
 def synthetic(sym, n_days):
     from .simulate import synthetic_day
     scale = {"BTC/USD": 950, "ETH/USD": 34}.get(sym, 5)
@@ -314,10 +344,24 @@ def main():
         say(f"     {k + ':00':<24}" + fmt(s))
 
     from .quant import STRATEGIES
-    say("\n5) STRATEGY COMPARISON (default settings, same costs)")
-    for C in STRATEGIES:
-        say(f"   {C.name:<16} train " + fmt(stats(simulate(train, cls=C, cap=3))))
-        say(f"   {'':<16} test  " + fmt(stats(simulate(test, cls=C, cap=3))))
+    etf_train = {k: v for k, v in train.items() if not is_crypto(k)}
+    etf_test = {k: v for k, v in test.items() if not is_crypto(k)}
+    say("\n5) STRATEGY x CHART SPEED (ETFs only, same costs) - which combination actually makes money?")
+    best = None
+    for tf in (1, 5, 15):
+        tr, te = resample(etf_train, tf), resample(etf_test, tf)
+        for C in STRATEGIES:
+            s_tr, s_te = stats(simulate(tr, cls=C, cap=3)), stats(simulate(te, cls=C, cap=3))
+            say(f"   {C.name:<16} {tf:>2}-min  train PF {s_tr['pf']:>5.2f} ${s_tr['pnl']:>+8,.0f} ({s_tr['n']:>4})"
+                f"   test PF {s_te['pf']:>5.2f} ${s_te['pnl']:>+8,.0f} ({s_te['n']:>4})")
+            if s_tr["pf"] > 1.2 and s_te["pf"] > 1.2 and s_tr["n"] >= 30 and s_te["n"] >= 15:
+                if not best or s_te["pnl"] > best[2]:
+                    best = (C.name, tf, s_te["pnl"])
+    bh, parts = buy_and_hold(etf_test)
+    say(f"\n6) BENCHMARK - buy & hold the same ETFs ($10k each) over the TEST period: ${bh:+,.0f}  ({', '.join(parts)})")
+    say("   verdict: " + (f"{best[0]} on {best[1]}-min bars was profitable on BOTH train and test"
+                          + (" and BEAT buy & hold" if best[2] > bh else ", but did NOT beat simply holding")
+                          if best else "no strategy/speed combination was reliably profitable - holding the ETFs did better"))
 
     with open("backtest_trades.csv", "w", newline="") as f:
         cols = ["sym", "date", "time", "setup", "entry", "stop", "target", "exit", "exit_time", "why_out", "qty", "pnl"]
