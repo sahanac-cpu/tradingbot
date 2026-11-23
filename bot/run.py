@@ -47,6 +47,9 @@ def main():
     ap.add_argument("--max-trades", type=int, default=10)
     ap.add_argument("--max-loss", type=float, default=0.01)
     ap.add_argument("--champion", help="force a strategy to trade the real account (default: picked daily)")
+    ap.add_argument("--aggressive", action="store_true",
+                    help="PAPER ONLY: 3x leveraged ETFs, 2%% risk/trade, up to 50%% per position, "
+                         "25 trades/day, -6%% daily stop, champion = best strategy even if it's losing")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--replay", action="store_true")
     ap.add_argument("--reset", action="store_true")
@@ -55,6 +58,11 @@ def main():
     ap.add_argument("--no-backfill", action="store_true")
     a = ap.parse_args()
     from .envfile import load; load()
+    if a.aggressive:   # PAPER ONLY - the order URL is hard-coded to Alpaca's paper server
+        if a.symbols == DEFAULT:
+            a.symbols = ["TQQQ", "SOXL", "UPRO", "TNA", "FNGU"]   # 3x leveraged ETFs: ~3x the daily moves
+        a.risk, a.max_position, a.max_trades, a.max_loss = 0.02, 0.50, 25, 0.06
+        os.makedirs("aggressive", exist_ok=True); os.chdir("aggressive")   # separate history + brains
     a.symbols = [s.upper() for s in a.symbols]
     a.watch = [s.upper() for s in a.watch if s.upper() not in a.symbols]
     watch, allsyms = set(a.watch), a.symbols + a.watch
@@ -220,7 +228,7 @@ def main():
                           "open": sum(1 for s_ in allsyms if sims[n].pos.get(s_, (0, 0))[0])})
         with L:
             S["status"], S["updated"] = status, datetime.now(ET).strftime("%H:%M:%S")
-            S["broker"] = "Alpaca paper" if alp else "Local fake money"
+            S["broker"] = ("Alpaca paper" if alp else "Local fake money") + (" · AGGRESSIVE MODE" if a.aggressive else "")
             S["champion"] = {"name": st["champion"], "note": st["note"]}
             S["board"] = board
             S["strategies"] = names
@@ -263,7 +271,7 @@ def main():
             for r in reviewers[n].finish_all():
                 add_review(r)
         st.update(day=now.date(), halted=False, day_start=real.equity(marks), trades_today=0)
-        champ, _, note = arena.pick_champion(now.date())
+        champ, _, note = arena.pick_champion(now.date(), allow_losing=a.aggressive)
         if a.champion:
             champ, note = a.champion, "chosen by you with --champion"
         st["champion"], st["note"] = champ, note

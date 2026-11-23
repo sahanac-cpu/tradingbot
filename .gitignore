@@ -11,3 +11,4 @@ history/
 model_*.json
 arena_*.csv
 brain_*.json
+aggressive/

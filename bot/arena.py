@@ -62,14 +62,14 @@ def score_table(before_date):
     return tot
 
 
-def pick_champion(today):
+def pick_champion(today, allow_losing=False):
     tot = score_table(today)
     ok = {k: v for k, v in tot.items() if v["n"] >= 5}
     if not ok:
         return STRATEGIES[0].name, tot, "not enough history yet - Game Theory trades by default"
     best = max(ok, key=lambda k: ok[k]["pnl"])
     v = ok[best]
-    if v["pnl"] <= 0:   # risk-averse: never hand real money to a losing strategy
+    if v["pnl"] <= 0 and not allow_losing:   # risk-averse: never hand real money to a losing strategy
         return None, tot, (f"no strategy made money over the last {LOOKBACK} days (best: {best} "
                            f"${v['pnl']:+,.0f}) - real account sits out today, all strategies keep simulating")
     return best, tot, (f"{best} made ${v['pnl']:+,.0f} over the last {v['days']} days "
