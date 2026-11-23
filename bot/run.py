@@ -16,7 +16,7 @@ position, max 10 real trades a day, ETFs only 9:50-15:30 ET and flat by 15:50, n
 trades after -1% on the day. Crypto is simulation-only (fees are larger than 1-min moves).
 """
 from __future__ import annotations
-import argparse, json, os, re, time, webbrowser
+import argparse, json, os, random, re, time, webbrowser
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from .paper import PaperBroker
@@ -36,7 +36,9 @@ slug = lambda n: re.sub(r"\W+", "_", n.lower()).strip("_")
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("symbols", nargs="*", default=DEFAULT)
-    ap.add_argument("--watch", nargs="*", default=["BTC/USD", "ETH/USD"], help="simulation-only symbols")
+    ap.add_argument("--watch", nargs="*", default=[],
+                    help="simulation-only symbols, e.g. BTC/USD (off by default: crypto fees exceed 1-min moves)")
+    ap.add_argument("--keep-orphans", action="store_true", help="don't close Alpaca positions the bot didn't open")
     ap.add_argument("--feed", choices=["yahoo", "alpaca"], default="yahoo")
     ap.add_argument("--broker", choices=["local", "alpaca"], default="local")
     ap.add_argument("--cash", type=float, default=100_000)
@@ -68,7 +70,8 @@ def main():
         acct = json.load(open(ACCOUNT))
         real.cash, real.start_cash = acct["cash"], acct["start_cash"]
     sims = {n: PaperBroker(100_000, log=f"arena_{slug(n)}.csv") for n in names}
-    brains = {n: Learner(path="model.json" if n == names[0] else f"model_{slug(n)}.json") for n in names}
+    # v2 brains start fresh: the old ones were trained mostly on crypto fee losses and blocked everything
+    brains = {n: Learner(path=f"brain_{slug(n)}.json") for n in names}
     reviewers = {n: Reviewer() for n in names}
     strat = {(n, s): C() for C in STRATEGIES for n in [C.name] for s in allsyms}
     meta, feats, n_today = {}, {}, {}
@@ -159,12 +162,13 @@ def main():
             s.pos = None; return
         x = features(s, sig, sym, mins - 570 if not crypto else mins)
         ok, prob, note = brains[n].decide(x)
-        if not ok and not a.no_learn:
+        explore = not ok and random.random() < 0.25   # keep some sim trades flowing so a filter can't lock itself out
+        if not ok and not a.no_learn and not explore:
             s.pos = None
             if n == st["champion"] and sym not in watch:
                 log(f"{sym} skipped by {n}'s learning filter ({note}): {sig['reason']}", "skip")
             return
-        reason = f"{sig['reason']} · AI {prob:.0%}"
+        reason = f"{sig['reason']} · AI {prob:.0%}" + (" · exploring" if explore else "")
         eq = sims[n].equity(marks)
         risk_ps = max(abs(sig["price"] - sig["stop"]), 1e-9)
         qty = min(eq * a.risk / risk_ps, eq * a.max_position / sig["price"])
@@ -176,7 +180,7 @@ def main():
         feats[k] = x; n_today[k] = n_today.get(k, 0) + 1
         record(n, sym, t, "BUY", qty, sig["price"], 0, reason, sig.get("why", ""), "sim")
         # ---- copy the champion's trade to the real account
-        if n != st["champion"] or sym in watch or owner.get(sym):
+        if n != st["champion"] or sym in watch or owner.get(sym) or (explore and not a.no_learn):
             return
         why_not = ("daily loss limit" if st["halted"] else
                    f"max {a.max_trades} real trades/day" if st["trades_today"] >= a.max_trades else None)
@@ -292,6 +296,17 @@ def main():
         f"{'Alpaca PAPER' if alp else 'local fake money'} ${real.cash:,.0f} | dashboard {url}")
     if not a.no_browser:
         webbrowser.open(url)
+    if alp and not a.replay:      # positions the bot doesn't know about (e.g. leftovers from old bugs)
+        try:
+            for p_ in alp.positions():
+                desc = f"{p_['symbol']} qty {p_['qty']} worth ${float(p_['market_value']):,.2f} (P&L ${float(p_['unrealized_pl']):+,.2f})"
+                if a.keep_orphans:
+                    log(f"ORPHAN position kept: {desc}", "bad")
+                else:
+                    alp.exit_all(p_["symbol"])
+                    log(f"ORPHAN position closed (the bot didn't open it): {desc}", "bad")
+        except Exception as e:
+            log(f"could not check Alpaca positions: {e}", "bad")
     if not a.replay and not a.no_backfill and len(arena.all_days()) < 3:
         log("back-filling the last 5 days so the leaderboard has history (one-time, ~1 min)...")
         try:

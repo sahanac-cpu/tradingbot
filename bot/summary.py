@@ -23,13 +23,13 @@ def main():
             real[k] += r.get(k, 0)
         cells = []
         for n in names:
-            a = d["arena"].get(n, {"pnl": 0, "n": 0, "wins": 0})
+            a = d["arena"].get(n, {"pnl": 0, "n": 0, "wins": 0})   # ETF trades only
             for k in tot[n]:
                 tot[n][k] += a.get(k, 0)
             cells.append(f"{a['pnl']:>+9.0f} ({a['n']:>2})")
         champ = "backfill" if d["source"] == "backfill" else (d.get("champion") or "sat out")
         print(f"{d['date']:<11}{champ:<16}{r.get('pnl', 0):>+10.2f}  " + "  ".join(f"{c:>14}" for c in cells))
-    print("\nTOTALS (simulated, all days)")
+    print("\nTOTALS (simulated ETF trades, all days - crypto excluded, its fees made every trade a loss)")
     for n in sorted(names, key=lambda n: -tot[n]["pnl"]):
         t = tot[n]
         print(f"  {n:<16} P&L ${t['pnl']:>+9,.2f}   trades {t['n']:>4}   win {100 * t['wins'] / max(t['n'], 1):>3.0f}%")

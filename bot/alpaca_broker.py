@@ -22,6 +22,10 @@ def account():
     return _req("GET", "/v2/account")
 
 
+def positions():
+    return _req("GET", "/v2/positions") or []
+
+
 def enter(sym, qty, side, stop, target):
     if "/" in sym:
         # Crypto: no bracket orders. Buy, then protect what we ACTUALLY hold - Alpaca takes

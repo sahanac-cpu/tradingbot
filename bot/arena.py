@@ -43,7 +43,7 @@ def summary():
     out = []
     for d in all_days():
         x = load_day(d) or {}
-        ar = x.get("arena", {})
+        ar = arena_stats(x.get("trades", []))
         best = max(ar, key=lambda k: ar[k]["pnl"]) if ar else None
         out.append({"date": d, "champion": x.get("champion"), "source": x.get("source", "live"),
                     "real": x.get("real", {}), "arena": ar, "best": best})
@@ -55,8 +55,8 @@ def score_table(before_date):
     days = [d for d in all_days() if d < str(before_date)][-LOOKBACK:]
     tot = {C.name: {"pnl": 0.0, "n": 0, "wins": 0, "days": 0} for C in STRATEGIES}
     for d in days:
-        for name, r in (load_day(d) or {}).get("arena", {}).items():
-            if name in tot:
+        for name, r in arena_stats((load_day(d) or {}).get("trades", [])).items():
+            if name in tot and r["n"]:
                 t = tot[name]
                 t["pnl"] += r["pnl"]; t["n"] += r["n"]; t["wins"] += r["wins"]; t["days"] += 1
     return tot
@@ -81,7 +81,7 @@ def arena_stats(trades):
     for C in STRATEGIES:
         g[C.name]
     for t in trades:
-        if t.get("side") == "EXIT" and t.get("account") == "sim":
+        if t.get("side") == "EXIT" and t.get("account") == "sim" and "/" not in t.get("sym", ""):  # ETFs only
             r = g[t["strategy"]]
             r["pnl"] = round(r["pnl"] + t["pnl"], 2); r["n"] += 1; r["wins"] += t["pnl"] > 0
     return dict(g)

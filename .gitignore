@@ -10,3 +10,4 @@ sim_trades.csv
 history/
 model_*.json
 arena_*.csv
+brain_*.json

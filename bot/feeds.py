@@ -45,15 +45,35 @@ def alpaca_bars(sym):
     return [Bar(b["t"], b["o"], b["h"], b["l"], b["c"], b["v"]) for b in d.get("bars") or []]
 
 
+_CRYPTO = {}
+
+
 def crypto_bars(sym, days_back=0):
-    """Bars since midnight ET (crypto never closes, so the 'day' runs midnight to midnight)."""
+    """Bars since midnight ET (crypto never closes, so the 'day' runs midnight to midnight).
+    Live calls only download bars newer than the last ones (avoids 429 rate limits)."""
+    midnight = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0)
+    if days_back == 0:
+        day, cached = _CRYPTO.get(sym, (None, []))
+        if day == midnight.date() and cached:
+            last = datetime.fromisoformat(cached[-1].t.replace("Z", "+00:00"))
+            new = _crypto_fetch(sym, last - timedelta(minutes=2))
+            have = {b.t for b in cached}
+            cached = cached + [b for b in new if b.t not in have]
+        else:
+            cached = _crypto_fetch(sym, midnight)
+        _CRYPTO[sym] = (midnight.date(), cached)
+        return cached
+    return _crypto_fetch(sym, midnight - timedelta(days=days_back))
+
+
+def _crypto_fetch(sym, start):
     out, token = [], None
-    start = (datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_back))
+    hdr = _keys() if os.environ.get("APCA_API_KEY_ID") else None   # keys = higher rate limit
     while True:
         q = {"symbols": sym, "timeframe": "1Min", "start": start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": 10000}
         if token:
             q["page_token"] = token
-        d = _get("https://data.alpaca.markets/v1beta3/crypto/us/bars?" + urllib.parse.urlencode(q))
+        d = _get("https://data.alpaca.markets/v1beta3/crypto/us/bars?" + urllib.parse.urlencode(q), hdr)
         out += [Bar(b["t"], b["o"], b["h"], b["l"], b["c"], b["v"]) for b in d["bars"].get(sym, [])]
         token = d.get("next_page_token")
         if not token:
