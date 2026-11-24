@@ -86,4 +86,89 @@ class TrendPullback(Strategy):
         return None
 
 
-STRATEGIES = [Strategy, MeanReversion, Momentum, TrendPullback]
+def _rsi(closes, n):
+    gains = losses = 0.0
+    for a_, b_ in zip(closes[-n - 1:], closes[-n:]):
+        d = b_ - a_
+        gains += max(d, 0); losses += max(-d, 0)
+    return 100.0 if losses == 0 else 100 - 100 / (1 + gains / losses)
+
+
+@dataclass
+class RSIDip(Strategy):
+    """Connors-style RSI(2): in an uptrend (above VWAP and rising 30-min average), a very
+    short-term oversold reading (RSI-2 under 10) usually bounces. Exit on the bounce."""
+    name = "RSI Dip"
+    target_label = "target (RSI bounce)"
+    p: Params = field(default_factory=lambda: replace(Params(), shakeout_bars=10))
+
+    def entries(self, bar, hod, lod, atr):
+        if len(self.bars) < 40:
+            return None
+        closes = [b.c for b in self.bars]
+        rsi = _rsi(closes, 2)
+        sma30, sma30_prev = statistics.fmean(closes[-30:]), statistics.fmean(closes[-35:-5])
+        vw = self.vwap()
+        if rsi < 10 and bar.c > vw and sma30 > sma30_prev and bar.c > bar.o:
+            stop = bar.l - 1.0 * atr
+            return self._enter(1, bar.c, stop, atr, "RSI-2 oversold in uptrend", target=bar.c + 1.5 * atr,
+                               why=f"RSI(2) hit {rsi:.0f} (deeply oversold for a 2-bar window) while price stays above "
+                                   f"VWAP ({vw:,.2f}) and the 30-min average is rising. Short, sharp dips inside an "
+                                   "uptrend tend to get bought - a classic quant mean-reversion edge.")
+        return None
+
+
+@dataclass
+class VWAPReclaim(Strategy):
+    """Microstructure: VWAP is the price big institutions benchmark against. When price
+    has been below it and reclaims it on rising volume, buyers have taken control."""
+    name = "VWAP Reclaim"
+    target_label = "target (back to day high)"
+
+    def entries(self, bar, hod, lod, atr):
+        if len(self.bars) < 45:
+            return None
+        vw = self.vwap()
+        below = sum(1 for b in self.bars[-16:-1] if b.c < vw)
+        avg_v = statistics.fmean(b.v for b in self.bars[-30:]) or 1
+        if below >= 12 and self.bars[-2].c < vw < bar.c and bar.v > 1.3 * avg_v and hod - bar.c > 1.5 * atr:
+            stop = min(b.l for b in self.bars[-5:]) - 0.3 * atr
+            return self._enter(1, bar.c, stop, atr, "VWAP reclaim", target=hod,
+                               why=f"Price spent {below} of the last 15 minutes below VWAP ({vw:,.2f}), then closed back "
+                                   f"above it on {bar.v / avg_v:.1f}x volume. Institutions benchmark to VWAP, so a "
+                                   "reclaim often means buyers took control; target is the day's high.")
+        return None
+
+
+@dataclass
+class SqueezeBreakout(Strategy):
+    """Volatility: when the Bollinger Bands contract inside the Keltner Channel the market
+    is coiling ('squeeze'). Quiet periods tend to end in big moves - buy the upside release."""
+    name = "Squeeze Breakout"
+    target_label = "target (volatility expansion)"
+    p: Params = field(default_factory=lambda: replace(Params(), shakeout_bars=12))
+    was_squeezed: int = 0
+
+    def entries(self, bar, hod, lod, atr):
+        if len(self.bars) < 40:
+            return None
+        closes = [b.c for b in self.bars[-20:]]
+        mid, sd = statistics.fmean(closes), statistics.pstdev(closes)
+        squeezed = 2 * sd < 1.5 * atr            # Bollinger(2sd) inside Keltner(1.5 ATR)
+        if squeezed:
+            self.was_squeezed += 1
+            return None
+        streak, self.was_squeezed = self.was_squeezed, 0
+        if streak >= 8 and bar.c > mid + 2 * sd and bar.c > self.vwap():
+            stop = mid - 0.5 * atr
+            return self._enter(1, bar.c, stop, atr, "squeeze release", target=bar.c + 3 * atr,
+                               why=f"Volatility was compressed for {streak} minutes (Bollinger Bands inside the Keltner "
+                                   "Channel), and price just broke out above the upper band and VWAP. Quiet markets "
+                                   "tend to end in big moves; riding the release.")
+        return None
+
+    def new_day(self):
+        super().new_day(); self.was_squeezed = 0
+
+
+STRATEGIES = [Strategy, MeanReversion, Momentum, TrendPullback, RSIDip, VWAPReclaim, SqueezeBreakout]
