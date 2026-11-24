@@ -1,6 +1,7 @@
 """One-screen summary of how the bot is doing. Run from the bot's folder:
 
-    cd ~/tradingbot-service && python3 -m bot.summary
+    cd ~/tradingbot-service && python3 -m bot.summary               # normal mode
+    cd ~/tradingbot-service && python3 -m bot.summary --aggressive  # aggressive mode
 """
 from __future__ import annotations
 import os
@@ -10,6 +11,9 @@ from .quant import STRATEGIES
 
 
 def main():
+    import sys
+    if "--aggressive" in sys.argv and os.path.isdir("aggressive"):
+        os.chdir("aggressive")
     days = arena.summary()
     if not days:
         return print("no history yet - is the bot running? (bash scripts/status.sh)")
@@ -37,7 +41,7 @@ def main():
           f"({100 * real['wins'] / max(real['n'], 1):.0f}% won) on {len(days)} days of history")
     champ, _, note = arena.pick_champion("9999-12-31")
     print(f"next champion if picked now: {champ or 'none - sitting out'} ({note})")
-    log = "logs/bot.log"
+    log = "logs/bot.log" if os.path.exists("logs/bot.log") else "../logs/bot.log"
     if os.path.exists(log):
         print("\nlast log lines:")
         print("".join(open(log).readlines()[-6:]).rstrip())
