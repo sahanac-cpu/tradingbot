@@ -28,6 +28,7 @@ from .review import Reviewer
 ET = ZoneInfo("America/New_York")
 ACCOUNT = "account.json"
 DEFAULT = ["VOO", "SPY", "QQQ", "IWM", "DIA"]
+STOCKS = ["NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "TSLA", "AMD"]   # liquid large caps
 CRYPTO_FEE = 0.0025
 SIM_CAP = 3            # simulated trades per strategy per symbol per day
 slug = lambda n: re.sub(r"\W+", "_", n.lower()).strip("_")
@@ -50,6 +51,8 @@ def main():
     ap.add_argument("--aggressive", action="store_true",
                     help="PAPER ONLY: 3x leveraged ETFs, 2%% risk/trade, up to 50%% per position, "
                          "25 trades/day, -6%% daily stop, champion = best strategy even if it's losing")
+    ap.add_argument("--stocks", action="store_true",
+                    help="trade popular individual stocks: " + " ".join(STOCKS))
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--replay", action="store_true")
     ap.add_argument("--reset", action="store_true")
@@ -58,6 +61,8 @@ def main():
     ap.add_argument("--no-backfill", action="store_true")
     a = ap.parse_args()
     from .envfile import load; load()
+    if a.stocks and a.symbols == DEFAULT:
+        a.symbols = list(STOCKS)
     if a.aggressive:   # PAPER ONLY - the order URL is hard-coded to Alpaca's paper server
         if a.symbols == DEFAULT:
             a.symbols = ["TQQQ", "SOXL", "UPRO", "TNA", "FNGU"]   # 3x leveraged ETFs: ~3x the daily moves
